@@ -1,4 +1,4 @@
-"""Export Instagram-ready PNGs from images/logo.svg.
+"""Export Instagram-ready PNGs from assets/logo/logo.svg.
 
 Builds eight variants (cream/blush/sage/blue/plum tiles, profile-pic with
 extra padding, plus two transparent overlays) by wrapping the source SVG
@@ -19,8 +19,8 @@ import cairosvg
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SRC_SVG = REPO_ROOT / "images" / "logo.svg"
-OUT_DIR = REPO_ROOT / "images" / "instagram"
+SRC_SVG = REPO_ROOT / "assets" / "logo" / "logo.svg"
+OUT_DIR = REPO_ROOT / "assets" / "logo" / "instagram"
 
 PLUM = "#3d2a3d"
 CREAM = "#faf6f1"
