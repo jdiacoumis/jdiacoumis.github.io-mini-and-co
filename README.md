@@ -20,8 +20,10 @@ mini-and-co/
 │   └── styles.css    # Site styles
 ├── js/
 │   └── main.js       # Site scripts (mobile nav toggle)
-└── images/
-    └── logo.svg      # Brand logo (placeholder SVG; swap in logo.png when available)
+└── assets/
+    ├── banner/      # Pull-up banner SVG + print-ready PNG
+    ├── logo/        # Brand logo SVG and Instagram variants
+    └── qr-code/     # Website QR code (PNG + SVG)
 ```
 
 ## Design
@@ -32,10 +34,10 @@ mini-and-co/
 
 ## To-do before launch
 
-- Replace `images/logo.svg` with the final brand logo file (PNG or higher-fidelity SVG) and update `<img>` references if needed.
+- Replace `assets/logo/logo.svg` with the final brand logo file (PNG or higher-fidelity SVG) and update `<img>` references if needed.
 - Add Camila's bio to the placeholder section on `about.html`.
 - Add a real booking system (Class Manager, TryBooking, etc.) and replace the `mailto:` register-interest CTAs.
-- Add an Open Graph / share image (`images/og-image.jpg`) and update the `og:image` meta tag on each page.
+- Add an Open Graph / share image (`assets/og-image.jpg`) and update the `og:image` meta tag on each page.
 
 ## Development
 
