@@ -16,12 +16,14 @@ python3 -m http.server 8080      # then http://localhost:8080
 npx serve .
 ```
 
-Asset exports (require `cairosvg` — `pip install --user cairosvg`):
+Asset exports (require `cairosvg` and `pillow` — both installed by [.devcontainer/post-create.sh](.devcontainer/post-create.sh), or manually with `pip install --user cairosvg pillow`):
 
 ```bash
 python3 scripts/export-banner.py            # 850×2000mm pull-up banner → assets/banner/banner.png
 python3 scripts/export-banner.py --dpi 200  # higher-res override
 python3 scripts/export-logo.py              # Instagram tile variants → assets/logo/instagram/
+python3 scripts/optimise-photos.py          # photos-staging/*.{jpg,jpeg,png} → assets/photos/<slug>-<width>.{jpg,webp}
+python3 scripts/optimise-photos.py --force  # re-export every photo regardless of mtime
 ```
 
 There is no test suite, lint config, or build step. `dist/`, `build/`, and `node_modules/` are gitignored but unused by the site itself.
@@ -47,6 +49,8 @@ All design tokens live as CSS custom properties at the top of [css/styles.css](c
 ### Asset pipeline
 
 `assets/banner/banner.svg` and `assets/logo/logo.svg` are the editable source files. The PNGs (`banner.png`, `logo/instagram/*.png`) are **generated** — regenerate via the scripts in `scripts/`, do not hand-edit. The logo export composites coloured backgrounds and recolours the plum hex by string-replacement, so any palette change there must match `--colour-text`.
+
+Photographic assets follow a different convention. Raw originals live locally in [photos-staging/](photos-staging/) (gitignored except for the README). Run `python3 scripts/optimise-photos.py` to turn each top-level `*.jpg`/`*.jpeg`/`*.png` into six tracked outputs at `assets/photos/<slug>-{600,1200,1600}.{jpg,webp}` — JPG quality 82, WebP quality 80, width-based resize with no upscale. The optimiser is idempotent (skips outputs newer than the source); `--force` reprocesses everything. Subdirectories of `photos-staging/` are intentionally skipped so they can act as a "not yet ready" holding area. Pillow is the only new Python dep and is installed by `post-create.sh`.
 
 ## OpenSpec workflow
 

@@ -27,6 +27,12 @@ node_modules/
 dist/
 build/
 
+# Photo staging — raw originals stay local, only the README is tracked.
+# Optimised outputs live in assets/photos/ (tracked) and are produced by
+# scripts/optimise-photos.py.
+/photos-staging/*
+!/photos-staging/README.md
+
 # Devcontainer
 .devcontainer/
 
