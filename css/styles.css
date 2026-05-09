@@ -652,6 +652,45 @@ section {
   font-size: 0.7rem;
 }
 
+.bio {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-lg);
+  align-items: start;
+  margin-top: var(--space-lg);
+}
+
+@media (min-width: 720px) {
+  .bio {
+    grid-template-columns: 2fr 3fr;
+    gap: var(--space-xl);
+  }
+}
+
+.bio__photo {
+  display: block;
+  margin: 0;
+}
+
+.bio__photo img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+}
+
+.bio__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  color: var(--colour-text-soft);
+}
+
+.bio__body p {
+  margin: 0;
+}
+
 .placeholder-note {
   background: var(--colour-bg-warm);
   border: 1px dashed var(--colour-line);
