@@ -108,7 +108,7 @@
 
   <!-- ===== HEADLINE ===== -->
   <text x="425" y="610" text-anchor="middle" class="display-light"
-        font-size="64" fill="#6b5466" letter-spacing="2.5">Baby Sensory Classes</text>
+        font-size="64" fill="#6b5466" letter-spacing="2.5">Sensory Play Classes</text>
 
   <!-- ===== SUBTITLE ===== -->
   <text x="425" y="675" text-anchor="middle" class="display-italic"

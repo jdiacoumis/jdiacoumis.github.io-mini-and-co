@@ -1,10 +1,10 @@
-# Mini & Co — Baby Sensory Classes
+# Mini & Co — Sensory Play Classes
 
-A simple HTML website for **Mini & Co**, a baby sensory classes business run by Camila.
+A simple HTML website for **Mini & Co**, a sensory play classes business for babies aged 3–12 months, run by Camila.
 
 ## About
 
-Mini & Co offers evidence-based baby sensory classes for babies aged 3–12 months and their mums. Each session is designed using play-based, developmentally informed activities that support sensory exploration, early communication, curiosity, and connection — held in a calm, welcoming space at Oran Park Library, NSW.
+Mini & Co offers evidence-based sensory play classes for babies aged 3–12 months and their mums. Each session is designed using play-based, developmentally informed activities that support sensory exploration, early communication, curiosity, and connection — held in a calm, welcoming space at Oran Park Library, NSW.
 
 Classes launch Wednesday 24 June 2026, with full-term enrolments opening for Term 3 from Wednesday 22 July 2026.
 
