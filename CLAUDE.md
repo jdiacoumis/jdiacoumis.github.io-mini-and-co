@@ -16,11 +16,13 @@ python3 -m http.server 8080      # then http://localhost:8080
 npx serve .
 ```
 
-Asset exports (require `cairosvg` and `pillow` — both installed by [.devcontainer/post-create.sh](.devcontainer/post-create.sh), or manually with `pip install --user cairosvg pillow`):
+Asset exports (require `cairosvg`, `pillow`, and `segno` — `cairosvg`/`pillow` are installed by [.devcontainer/post-create.sh](.devcontainer/post-create.sh); install all manually with `pip install --user cairosvg pillow segno`):
 
 ```bash
 python3 scripts/export-banner.py            # 850×2000mm pull-up banner → assets/banner/banner.png
 python3 scripts/export-banner.py --dpi 200  # higher-res override
+python3 scripts/export-flyer.py             # A4 portrait flyer → assets/flyer/flyer.{svg,png}
+python3 scripts/export-flyer.py --dpi 300   # higher-res override (default 200)
 python3 scripts/export-logo.py              # Instagram tile variants → assets/logo/instagram/
 python3 scripts/optimise-photos.py          # photos-staging/*.{jpg,jpeg,png} → assets/photos/<slug>-<width>.{jpg,webp}
 python3 scripts/optimise-photos.py --force  # re-export every photo regardless of mtime
