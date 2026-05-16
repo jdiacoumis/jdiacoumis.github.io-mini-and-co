@@ -275,7 +275,7 @@ def build_svg() -> str:
   <!-- ===== QR CODE ===== -->
   {qr_block}
   <text x="{qr_x + qr_side / 2}" y="{qr_y + qr_side + 3.5}" text-anchor="middle"
-        class="body" font-size="2.6" fill="{TEXT_MUTED}" letter-spacing="0.6">SCAN TO REGISTER YOUR INTEREST</text>
+        class="body" font-size="2.6" fill="{TEXT_MUTED}" letter-spacing="0.6">SCAN TO BOOK</text>
 
 </svg>
 """
