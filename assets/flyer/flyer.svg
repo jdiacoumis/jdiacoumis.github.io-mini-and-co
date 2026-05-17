@@ -49,7 +49,7 @@
   </g>
 
   <!-- ===== LOGO ===== -->
-  <svg x="70.0" y="12" width="70" height="70" viewBox="0 0 400 400" preserveAspectRatio="xMidYMid meet">
+  <svg x="70.0" y="7" width="70" height="70" viewBox="0 0 400 400" preserveAspectRatio="xMidYMid meet">
   <title id="logoTitle">Mini &amp; Co. Sensory Classes</title>
 
   <defs>
@@ -90,16 +90,18 @@
   </text>
 </svg>
 
-  <!-- Hairline ornament under logo -->
-  <line x1="91.0" y1="92" x2="119.0" y2="92"
+  <!-- Hairline ornament under logo — tucked close to the wordmark (which ends
+       around y=74) so the ornament reads as part of the logo lockup rather
+       than a separator competing with the headline below. -->
+  <line x1="91.0" y1="80" x2="119.0" y2="80"
         stroke="#b39db0" stroke-width="0.3"/>
-  <circle cx="105.0" cy="92" r="0.7" fill="#b39db0"/>
+  <circle cx="105.0" cy="80" r="0.7" fill="#b39db0"/>
 
   <!-- ===== HEADLINE ===== -->
   <!-- Trademark mitigation: the word pairing in the original mock is avoided
-       site-wide (see commit 80ed250); headline reads just "Sensory Classes". -->
+       site-wide (see commit 80ed250); headline reads "Developmental Play". -->
   <text x="105.0" y="112" text-anchor="middle" class="display-light"
-        font-size="22" fill="#3d2a3d" letter-spacing="1">Sensory Classes</text>
+        font-size="22" fill="#3d2a3d" letter-spacing="1">Developmental Play</text>
 
   <!-- ===== TAGLINE ===== -->
   <text x="105.0" y="125" text-anchor="middle" class="display-italic"
@@ -131,28 +133,23 @@
   <line x1="91.0" y1="207" x2="119.0" y2="207" stroke="#b39db0" stroke-width="0.3"/>
   <circle cx="105.0" cy="207" r="0.7" fill="#b39db0"/>
 
-  <!-- Date block: 11mm leading between the display lines, 10mm into the
-       italic supporting copy — gives the dates room to breathe. -->
+  <!-- Date block: 11mm display→italic leading, 12mm into the muted footnote. -->
   <text x="105.0" y="217" text-anchor="middle" class="display"
         font-size="9" fill="#3d2a3d" letter-spacing="0.2">Founding class  ·  Wednesday 24 June  ·  $20</text>
-  <text x="105.0" y="228" text-anchor="middle" class="display"
-        font-size="9" fill="#3d2a3d" letter-spacing="0.2">Trial class  ·  Wednesday 1 July  ·  $25</text>
-  <text x="105.0" y="238" text-anchor="middle" class="display-italic"
+  <text x="105.0" y="228" text-anchor="middle" class="display-italic"
         font-size="7.5" fill="#6b5466" letter-spacing="0.2">Term 3 starts Wednesday 22 July</text>
-  <text x="105.0" y="247" text-anchor="middle" class="display-italic"
-        font-size="7.5" fill="#6b5466" letter-spacing="0.2">Single class $25  ·  Full-term package $220</text>
 
-  <text x="105.0" y="254" text-anchor="middle" class="display-italic"
+  <text x="105.0" y="240" text-anchor="middle" class="display-italic"
         font-size="6" fill="#8d7d8a" letter-spacing="0.2">Limited spots available</text>
 
   <!-- ===== BOOKINGS & ENQUIRIES ===== -->
-  <text x="105.0" y="262" text-anchor="middle" class="eyebrow"
+  <text x="105.0" y="252" text-anchor="middle" class="eyebrow"
         font-size="5" fill="#8d7d8a">Bookings &amp; enquiries</text>
 
   <!-- Contact column on the left, QR on the right. Contacts vertically
-       centred against the QR block (26mm tall, 264..290). -->
+       centred against the QR block (26mm tall, 254..280). -->
   <!-- Row 1: Website -->
-  <g transform="translate(20, 268)">
+  <g transform="translate(20, 258)">
     <g fill="none" stroke="#3d2a3d" stroke-width="0.4" stroke-linecap="round" stroke-linejoin="round">
       <circle cx="3" cy="3" r="2.6"/>
       <ellipse cx="3" cy="3" rx="1.05" ry="2.6"/>
@@ -164,7 +161,7 @@
   </g>
 
   <!-- Row 2: Instagram -->
-  <g transform="translate(20, 277)">
+  <g transform="translate(20, 267)">
     <g fill="none" stroke="#3d2a3d" stroke-width="0.4" stroke-linecap="round" stroke-linejoin="round">
       <rect x="0.4" y="0.4" width="5.2" height="5.2" rx="1.3"/>
       <circle cx="3" cy="3" r="1.25"/>
@@ -174,7 +171,7 @@
   </g>
 
   <!-- Row 3: Email -->
-  <g transform="translate(20, 286)">
+  <g transform="translate(20, 276)">
     <g fill="none" stroke="#3d2a3d" stroke-width="0.4" stroke-linecap="round" stroke-linejoin="round">
       <rect x="0.4" y="1" width="5.2" height="4" rx="0.5"/>
       <path d="M0.4 1.5 L3 3.5 L5.6 1.5"/>
@@ -183,8 +180,8 @@
   </g>
 
   <!-- ===== QR CODE ===== -->
-  <g transform="translate(164 264) scale(0.5777777777777777)" aria-label="QR code linking to https://miniandcosensoryclasses.com/"><path d="M4 4.5h7m1 0h6m1 0h1m1 0h2m7 0h2m2 0h7m-37 1h1m5 0h1m1 0h5m2 0h1m2 0h8m1 0h1m2 0h1m5 0h1m-37 1h1m1 0h3m1 0h1m4 0h1m5 0h1m4 0h3m1 0h3m1 0h1m1 0h3m1 0h1m-37 1h1m1 0h3m1 0h1m1 0h1m3 0h3m1 0h1m1 0h2m2 0h1m3 0h2m2 0h1m1 0h3m1 0h1m-37 1h1m1 0h3m1 0h1m1 0h5m1 0h1m1 0h3m1 0h1m2 0h5m2 0h1m1 0h3m1 0h1m-37 1h1m5 0h1m1 0h1m1 0h4m2 0h1m4 0h2m2 0h4m1 0h1m5 0h1m-37 1h7m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h7m-28 1h2m2 0h1m1 0h1m1 0h2m1 0h1m1 0h1m1 0h1m1 0h1m-24 1h1m2 0h1m2 0h1m1 0h1m2 0h3m1 0h2m3 0h1m3 0h2m2 0h3m1 0h2m-36 1h3m4 0h2m1 0h1m1 0h1m2 0h3m1 0h4m2 0h4m1 0h1m2 0h1m1 0h1m-37 1h2m1 0h1m1 0h2m1 0h1m1 0h4m1 0h1m1 0h3m1 0h4m2 0h1m2 0h7m-37 1h5m2 0h3m5 0h3m4 0h2m1 0h1m2 0h1m2 0h2m2 0h2m-36 1h1m1 0h2m1 0h2m3 0h2m5 0h1m2 0h2m1 0h2m1 0h1m1 0h2m4 0h1m-35 1h2m4 0h2m1 0h4m1 0h2m1 0h1m1 0h1m3 0h1m5 0h2m1 0h1m1 0h2m-37 1h1m3 0h1m1 0h1m1 0h2m2 0h2m2 0h1m4 0h4m1 0h1m3 0h3m1 0h1m1 0h1m-37 1h1m1 0h1m1 0h2m2 0h3m2 0h2m1 0h1m2 0h1m2 0h2m1 0h2m2 0h1m1 0h1m3 0h2m-37 1h1m1 0h1m2 0h2m2 0h1m1 0h3m1 0h1m2 0h3m1 0h2m4 0h4m1 0h3m-36 1h2m5 0h1m1 0h2m2 0h4m8 0h2m1 0h1m1 0h1m1 0h3m1 0h1m-36 1h1m3 0h2m2 0h2m4 0h2m1 0h2m1 0h3m5 0h1m3 0h4m-37 1h2m2 0h2m6 0h2m1 0h1m1 0h3m3 0h1m2 0h1m2 0h1m1 0h2m1 0h2m-36 1h1m1 0h1m1 0h3m3 0h3m3 0h2m1 0h2m2 0h1m1 0h4m1 0h3m3 0h1m-37 1h1m2 0h3m2 0h1m1 0h3m1 0h1m2 0h3m1 0h1m1 0h1m2 0h1m2 0h2m2 0h1m1 0h2m-37 1h1m2 0h2m1 0h1m2 0h1m1 0h3m7 0h4m4 0h1m1 0h2m1 0h3m-35 1h1m4 0h3m7 0h3m1 0h3m2 0h1m3 0h1m1 0h1m2 0h2m-37 1h2m3 0h2m4 0h1m4 0h1m4 0h2m1 0h1m2 0h1m1 0h1m2 0h2m2 0h1m-36 1h1m1 0h1m3 0h2m1 0h2m2 0h1m1 0h3m1 0h2m1 0h3m1 0h3m5 0h2m-37 1h1m2 0h4m2 0h1m1 0h1m1 0h2m1 0h1m1 0h2m4 0h1m1 0h1m2 0h6m1 0h1m-36 1h4m3 0h1m1 0h1m1 0h2m1 0h2m1 0h2m1 0h1m2 0h4m2 0h1m1 0h2m2 0h1m-37 1h2m1 0h1m1 0h5m1 0h3m1 0h3m1 0h1m1 0h4m3 0h5m1 0h1m1 0h1m-29 1h1m2 0h1m2 0h1m4 0h2m2 0h2m1 0h1m1 0h1m3 0h1m3 0h1m-37 1h7m2 0h2m3 0h3m1 0h2m1 0h2m1 0h2m1 0h2m1 0h1m1 0h1m1 0h3m-37 1h1m5 0h1m2 0h2m3 0h3m1 0h1m3 0h1m1 0h1m3 0h1m3 0h1m1 0h1m-35 1h1m1 0h3m1 0h1m4 0h1m1 0h1m1 0h1m2 0h1m1 0h1m1 0h1m2 0h2m1 0h6m1 0h1m-36 1h1m1 0h3m1 0h1m1 0h1m1 0h2m1 0h3m1 0h2m2 0h3m1 0h2m2 0h1m1 0h3m1 0h2m-37 1h1m1 0h3m1 0h1m4 0h1m1 0h2m2 0h1m1 0h2m1 0h1m3 0h1m2 0h1m2 0h2m2 0h1m-37 1h1m5 0h1m2 0h4m4 0h1m1 0h2m1 0h1m2 0h1m1 0h2m3 0h1m-33 1h7m3 0h3m8 0h2m1 0h6m5 0h2" stroke="#3d2a3d" stroke-width="1" fill="none"/></g>
-  <text x="177.0" y="293.5" text-anchor="middle"
+  <g transform="translate(164 254) scale(0.5777777777777777)" aria-label="QR code linking to https://miniandcosensoryclasses.com/"><path d="M4 4.5h7m1 0h6m1 0h1m1 0h2m7 0h2m2 0h7m-37 1h1m5 0h1m1 0h5m2 0h1m2 0h8m1 0h1m2 0h1m5 0h1m-37 1h1m1 0h3m1 0h1m4 0h1m5 0h1m4 0h3m1 0h3m1 0h1m1 0h3m1 0h1m-37 1h1m1 0h3m1 0h1m1 0h1m3 0h3m1 0h1m1 0h2m2 0h1m3 0h2m2 0h1m1 0h3m1 0h1m-37 1h1m1 0h3m1 0h1m1 0h5m1 0h1m1 0h3m1 0h1m2 0h5m2 0h1m1 0h3m1 0h1m-37 1h1m5 0h1m1 0h1m1 0h4m2 0h1m4 0h2m2 0h4m1 0h1m5 0h1m-37 1h7m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h7m-28 1h2m2 0h1m1 0h1m1 0h2m1 0h1m1 0h1m1 0h1m1 0h1m-24 1h1m2 0h1m2 0h1m1 0h1m2 0h3m1 0h2m3 0h1m3 0h2m2 0h3m1 0h2m-36 1h3m4 0h2m1 0h1m1 0h1m2 0h3m1 0h4m2 0h4m1 0h1m2 0h1m1 0h1m-37 1h2m1 0h1m1 0h2m1 0h1m1 0h4m1 0h1m1 0h3m1 0h4m2 0h1m2 0h7m-37 1h5m2 0h3m5 0h3m4 0h2m1 0h1m2 0h1m2 0h2m2 0h2m-36 1h1m1 0h2m1 0h2m3 0h2m5 0h1m2 0h2m1 0h2m1 0h1m1 0h2m4 0h1m-35 1h2m4 0h2m1 0h4m1 0h2m1 0h1m1 0h1m3 0h1m5 0h2m1 0h1m1 0h2m-37 1h1m3 0h1m1 0h1m1 0h2m2 0h2m2 0h1m4 0h4m1 0h1m3 0h3m1 0h1m1 0h1m-37 1h1m1 0h1m1 0h2m2 0h3m2 0h2m1 0h1m2 0h1m2 0h2m1 0h2m2 0h1m1 0h1m3 0h2m-37 1h1m1 0h1m2 0h2m2 0h1m1 0h3m1 0h1m2 0h3m1 0h2m4 0h4m1 0h3m-36 1h2m5 0h1m1 0h2m2 0h4m8 0h2m1 0h1m1 0h1m1 0h3m1 0h1m-36 1h1m3 0h2m2 0h2m4 0h2m1 0h2m1 0h3m5 0h1m3 0h4m-37 1h2m2 0h2m6 0h2m1 0h1m1 0h3m3 0h1m2 0h1m2 0h1m1 0h2m1 0h2m-36 1h1m1 0h1m1 0h3m3 0h3m3 0h2m1 0h2m2 0h1m1 0h4m1 0h3m3 0h1m-37 1h1m2 0h3m2 0h1m1 0h3m1 0h1m2 0h3m1 0h1m1 0h1m2 0h1m2 0h2m2 0h1m1 0h2m-37 1h1m2 0h2m1 0h1m2 0h1m1 0h3m7 0h4m4 0h1m1 0h2m1 0h3m-35 1h1m4 0h3m7 0h3m1 0h3m2 0h1m3 0h1m1 0h1m2 0h2m-37 1h2m3 0h2m4 0h1m4 0h1m4 0h2m1 0h1m2 0h1m1 0h1m2 0h2m2 0h1m-36 1h1m1 0h1m3 0h2m1 0h2m2 0h1m1 0h3m1 0h2m1 0h3m1 0h3m5 0h2m-37 1h1m2 0h4m2 0h1m1 0h1m1 0h2m1 0h1m1 0h2m4 0h1m1 0h1m2 0h6m1 0h1m-36 1h4m3 0h1m1 0h1m1 0h2m1 0h2m1 0h2m1 0h1m2 0h4m2 0h1m1 0h2m2 0h1m-37 1h2m1 0h1m1 0h5m1 0h3m1 0h3m1 0h1m1 0h4m3 0h5m1 0h1m1 0h1m-29 1h1m2 0h1m2 0h1m4 0h2m2 0h2m1 0h1m1 0h1m3 0h1m3 0h1m-37 1h7m2 0h2m3 0h3m1 0h2m1 0h2m1 0h2m1 0h2m1 0h1m1 0h1m1 0h3m-37 1h1m5 0h1m2 0h2m3 0h3m1 0h1m3 0h1m1 0h1m3 0h1m3 0h1m1 0h1m-35 1h1m1 0h3m1 0h1m4 0h1m1 0h1m1 0h1m2 0h1m1 0h1m1 0h1m2 0h2m1 0h6m1 0h1m-36 1h1m1 0h3m1 0h1m1 0h1m1 0h2m1 0h3m1 0h2m2 0h3m1 0h2m2 0h1m1 0h3m1 0h2m-37 1h1m1 0h3m1 0h1m4 0h1m1 0h2m2 0h1m1 0h2m1 0h1m3 0h1m2 0h1m2 0h2m2 0h1m-37 1h1m5 0h1m2 0h4m4 0h1m1 0h2m1 0h1m2 0h1m1 0h2m3 0h1m-33 1h7m3 0h3m8 0h2m1 0h6m5 0h2" stroke="#3d2a3d" stroke-width="1" fill="none"/></g>
+  <text x="177.0" y="283.5" text-anchor="middle"
         class="body" font-size="2.6" fill="#8d7d8a" letter-spacing="0.6">SCAN TO BOOK</text>
 
 </svg>
