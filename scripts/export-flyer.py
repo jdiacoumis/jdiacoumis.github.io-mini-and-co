@@ -111,7 +111,7 @@ def build_svg() -> str:
     # leaving room for a left-hand contact column on the same row.
     qr_side = 26
     qr_x = WIDTH_MM - 20 - qr_side  # right-aligned to a 20mm margin
-    qr_y = 264
+    qr_y = 254
     qr_block = qr_svg_group(QR_TARGET_URL, qr_side, qr_x, qr_y)
 
     # Logo: nested SVG inheriting our coordinate system. The 0..400 viewBox
@@ -119,7 +119,8 @@ def build_svg() -> str:
     logo_w = 70
     logo_h = 70  # square viewBox keeps "Mini & Co. — sensory classes —" centred
     logo_x = (WIDTH_MM - logo_w) / 2
-    logo_y = 12
+    logo_y = 7  # lifted from the original 12mm so the logo + ornament read as
+                # a tight unit at the top, leaving the headline more breathing room
     logo_svg = (
         f'<svg x="{logo_x}" y="{logo_y}" width="{logo_w}" height="{logo_h}" '
         f'viewBox="0 0 400 400" preserveAspectRatio="xMidYMid meet">'
@@ -180,16 +181,18 @@ def build_svg() -> str:
   <!-- ===== LOGO ===== -->
   {logo_svg}
 
-  <!-- Hairline ornament under logo -->
-  <line x1="{WIDTH_MM / 2 - 14}" y1="92" x2="{WIDTH_MM / 2 + 14}" y2="92"
+  <!-- Hairline ornament under logo — tucked close to the wordmark (which ends
+       around y=74) so the ornament reads as part of the logo lockup rather
+       than a separator competing with the headline below. -->
+  <line x1="{WIDTH_MM / 2 - 14}" y1="80" x2="{WIDTH_MM / 2 + 14}" y2="80"
         stroke="{ORNAMENT}" stroke-width="0.3"/>
-  <circle cx="{WIDTH_MM / 2}" cy="92" r="0.7" fill="{ORNAMENT}"/>
+  <circle cx="{WIDTH_MM / 2}" cy="80" r="0.7" fill="{ORNAMENT}"/>
 
   <!-- ===== HEADLINE ===== -->
   <!-- Trademark mitigation: the word pairing in the original mock is avoided
-       site-wide (see commit 80ed250); headline reads just "Sensory Classes". -->
+       site-wide (see commit 80ed250); headline reads "Developmental Play". -->
   <text x="{WIDTH_MM / 2}" y="112" text-anchor="middle" class="display-light"
-        font-size="22" fill="{PLUM}" letter-spacing="1">Sensory Classes</text>
+        font-size="22" fill="{PLUM}" letter-spacing="1">Developmental Play</text>
 
   <!-- ===== TAGLINE ===== -->
   <text x="{WIDTH_MM / 2}" y="125" text-anchor="middle" class="display-italic"
@@ -221,28 +224,23 @@ def build_svg() -> str:
   <line x1="{WIDTH_MM / 2 - 14}" y1="207" x2="{WIDTH_MM / 2 + 14}" y2="207" stroke="{ORNAMENT}" stroke-width="0.3"/>
   <circle cx="{WIDTH_MM / 2}" cy="207" r="0.7" fill="{ORNAMENT}"/>
 
-  <!-- Date block: 11mm leading between the display lines, 10mm into the
-       italic supporting copy — gives the dates room to breathe. -->
+  <!-- Date block: 11mm display→italic leading, 12mm into the muted footnote. -->
   <text x="{WIDTH_MM / 2}" y="217" text-anchor="middle" class="display"
         font-size="9" fill="{PLUM}" letter-spacing="0.2">Founding class  ·  Wednesday 24 June  ·  $20</text>
-  <text x="{WIDTH_MM / 2}" y="228" text-anchor="middle" class="display"
-        font-size="9" fill="{PLUM}" letter-spacing="0.2">Trial class  ·  Wednesday 1 July  ·  $25</text>
-  <text x="{WIDTH_MM / 2}" y="238" text-anchor="middle" class="display-italic"
+  <text x="{WIDTH_MM / 2}" y="228" text-anchor="middle" class="display-italic"
         font-size="7.5" fill="{TEXT_SOFT}" letter-spacing="0.2">Term 3 starts Wednesday 22 July</text>
-  <text x="{WIDTH_MM / 2}" y="247" text-anchor="middle" class="display-italic"
-        font-size="7.5" fill="{TEXT_SOFT}" letter-spacing="0.2">Single class $25  ·  Full-term package $220</text>
 
-  <text x="{WIDTH_MM / 2}" y="254" text-anchor="middle" class="display-italic"
+  <text x="{WIDTH_MM / 2}" y="240" text-anchor="middle" class="display-italic"
         font-size="6" fill="{TEXT_MUTED}" letter-spacing="0.2">Limited spots available</text>
 
   <!-- ===== BOOKINGS & ENQUIRIES ===== -->
-  <text x="{WIDTH_MM / 2}" y="262" text-anchor="middle" class="eyebrow"
+  <text x="{WIDTH_MM / 2}" y="252" text-anchor="middle" class="eyebrow"
         font-size="5" fill="{TEXT_MUTED}">Bookings &amp; enquiries</text>
 
   <!-- Contact column on the left, QR on the right. Contacts vertically
        centred against the QR block ({qr_side}mm tall, {qr_y}..{qr_y + qr_side}). -->
   <!-- Row 1: Website -->
-  <g transform="translate(20, 268)">
+  <g transform="translate(20, 258)">
     <g fill="none" stroke="{PLUM}" stroke-width="0.4" stroke-linecap="round" stroke-linejoin="round">
       <circle cx="3" cy="3" r="2.6"/>
       <ellipse cx="3" cy="3" rx="1.05" ry="2.6"/>
@@ -254,7 +252,7 @@ def build_svg() -> str:
   </g>
 
   <!-- Row 2: Instagram -->
-  <g transform="translate(20, 277)">
+  <g transform="translate(20, 267)">
     <g fill="none" stroke="{PLUM}" stroke-width="0.4" stroke-linecap="round" stroke-linejoin="round">
       <rect x="0.4" y="0.4" width="5.2" height="5.2" rx="1.3"/>
       <circle cx="3" cy="3" r="1.25"/>
@@ -264,7 +262,7 @@ def build_svg() -> str:
   </g>
 
   <!-- Row 3: Email -->
-  <g transform="translate(20, 286)">
+  <g transform="translate(20, 276)">
     <g fill="none" stroke="{PLUM}" stroke-width="0.4" stroke-linecap="round" stroke-linejoin="round">
       <rect x="0.4" y="1" width="5.2" height="4" rx="0.5"/>
       <path d="M0.4 1.5 L3 3.5 L5.6 1.5"/>
