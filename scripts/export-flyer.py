@@ -197,7 +197,7 @@ def build_svg() -> str:
   <!-- ===== TAGLINE ===== -->
   <text x="{WIDTH_MM / 2}" y="125" text-anchor="middle" class="display-italic"
         font-size="6.5" fill="{TEXT_SOFT}" letter-spacing="0.1">
-    <tspan x="{WIDTH_MM / 2}" dy="0">Evidence-based sensory play for babies 3–12 months and their mums,</tspan>
+    <tspan x="{WIDTH_MM / 2}" dy="0">Evidence-based sensory play for little ones 3–12 months and their mums,</tspan>
     <tspan x="{WIDTH_MM / 2}" dy="8">designed to support development, nurture connection,</tspan>
     <tspan x="{WIDTH_MM / 2}" dy="8">and create a quiet, welcoming space to bond.</tspan>
   </text>

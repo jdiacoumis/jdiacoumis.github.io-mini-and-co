@@ -22,7 +22,7 @@ The "Meet Camila" section of `about.html` SHALL contain Camila's biographical pr
 
 ### Requirement: The bio prose SHALL be written in first person and cover four narrative beats
 
-The bio copy SHALL be authored in first person ("I'm Camila…") and SHALL cover, in order: (1) Camila's professional background and area of focus; (2) the arc of her path from Brazil to Australia and into early childhood education; (3) the personal motivation behind starting Mini & Co. — specifically the loneliness of early motherhood and the desire to connect mums through learning about child development; (4) what she hopes mums and babies take home from each class.
+The bio copy SHALL be authored in first person ("I'm Camila…") and SHALL cover, in order: (1) Camila's professional background and area of focus; (2) the arc of her path from Brazil to Australia and into early childhood education; (3) the personal motivation behind starting Mini & Co. — specifically the loneliness of early motherhood and the desire to connect mums through learning about child development; (4) what she hopes mums and little ones take home from each class.
 
 #### Scenario: Reader reads the bio top to bottom
 
@@ -44,11 +44,13 @@ The bio section SHALL contain exactly the following four paragraphs, in this ord
 >
 > I was born in Brazil, where I studied political science and worked as a coordinator at the Rio 2016 Olympic Games. After moving to Australia ten years ago, I discovered early childhood education, fell in love with it, and trained as an educator.
 >
-> Then I had my own children, a four-year-old and a baby, and learned how lonely and isolating early motherhood can quietly be. That's the real reason Mini & Co. exists. I wanted a space where mums could connect with each other through something genuine, learning about how their babies grow and develop, alongside a calm, positive sensory experience for the little ones.
+> Then I had my own children, a four-year-old and a baby, and learned how lonely and isolating early motherhood can quietly be. That's the real reason Mini & Co. exists. I wanted a space where mums could connect with each other through something genuine, learning about how their little ones grow and develop, alongside a calm, positive sensory experience for the little ones.
 >
-> What I hope you take home from each class is a sense of belonging: to a community, to other mums, to the small daily work of helping a baby grow. You shouldn't have to do any of that alone.
+> What I hope you take home from each class is a sense of belonging: to a community, to other mums, to the small daily work of helping a little one grow. You shouldn't have to do any of that alone.
 
 When the prose is rendered into `about.html`, the ampersand in "Mini & Co." MUST be HTML-escaped as `&amp;` per the rest of the site; no other character substitutions are required.
+
+The phrase "a four-year-old and a baby" in paragraph three is deliberately preserved (rather than softened to "a little one") because "a baby" carries an age-contrast against "a four-year-old" that "a little one" would lose; both Camila's children are little ones, but only one was a baby at the time of the narrative.
 
 #### Scenario: Rendered page text matches the canonical prose word-for-word
 
