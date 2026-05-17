@@ -25,7 +25,7 @@
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
-    "@type": "LocalBusiness",
+    "@type": ["LocalBusiness", "ChildCare"],
     "name": "Mini & Co.",
     "description": "Evidence-based sensory play classes for babies aged 3–12 months and their mums in Oran Park, NSW.",
     "url": "https://miniandcosensoryclasses.com/",
@@ -40,6 +40,20 @@
       "postalCode": "2570",
       "addressCountry": "AU"
     },
+    "geo": {
+      "@type": "GeoCoordinates",
+      "latitude": -33.9985,
+      "longitude": 150.7395
+    },
+    "areaServed": [
+      { "@type": "Place", "name": "Oran Park, NSW" },
+      { "@type": "Place", "name": "Catherine Field, NSW" },
+      { "@type": "Place", "name": "Gledswood Hills, NSW" },
+      { "@type": "Place", "name": "Gregory Hills, NSW" },
+      { "@type": "Place", "name": "Harrington Park, NSW" },
+      { "@type": "Place", "name": "Camden, NSW" },
+      { "@type": "Place", "name": "Narellan, NSW" }
+    ],
     "openingHoursSpecification": [
       {
         "@type": "OpeningHoursSpecification",
@@ -55,8 +69,110 @@
       }
     ],
     "priceRange": "$25",
+    "hasOfferCatalog": {
+      "@type": "OfferCatalog",
+      "name": "Mini & Co. classes",
+      "itemListElement": [
+        {
+          "@type": "Offer",
+          "url": "https://mini-co-sensory.classforkids.io",
+          "price": "25",
+          "priceCurrency": "AUD",
+          "availability": "https://schema.org/InStock",
+          "itemOffered": {
+            "@type": "Service",
+            "name": "Sensory play class for babies 3–12 months",
+            "serviceType": "Sensory play class",
+            "areaServed": { "@type": "Place", "name": "Oran Park, NSW" },
+            "provider": {
+              "@type": "Organization",
+              "name": "Mini & Co.",
+              "url": "https://miniandcosensoryclasses.com/"
+            }
+          }
+        }
+      ]
+    },
     "sameAs": [
       "https://instagram.com/miniandco.classes"
+    ]
+  }
+  </script>
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "Event",
+        "name": "Mini & Co. Sensory Play — Launch Class (Morning)",
+        "description": "The launch class for Mini & Co. — a calm, evidence-based sensory play class for babies 3–12 months and their mums, held at Oran Park Library.",
+        "startDate": "2026-06-24T11:00:00+10:00",
+        "endDate": "2026-06-24T11:45:00+10:00",
+        "eventStatus": "https://schema.org/EventScheduled",
+        "eventAttendanceMode": "https://schema.org/OfflineEventAttendanceMode",
+        "image": "https://miniandcosensoryclasses.com/assets/logo/instagram/logo-square-cream.png",
+        "location": {
+          "@type": "Place",
+          "name": "Oran Park Library — Sandown Room",
+          "address": {
+            "@type": "PostalAddress",
+            "streetAddress": "72 Central Ave",
+            "addressLocality": "Oran Park",
+            "addressRegion": "NSW",
+            "postalCode": "2570",
+            "addressCountry": "AU"
+          }
+        },
+        "organizer": {
+          "@type": "Organization",
+          "name": "Mini & Co.",
+          "url": "https://miniandcosensoryclasses.com/"
+        },
+        "offers": {
+          "@type": "Offer",
+          "url": "https://mini-co-sensory.classforkids.io",
+          "price": "25",
+          "priceCurrency": "AUD",
+          "availability": "https://schema.org/InStock",
+          "validFrom": "2026-05-14T00:00:00+10:00"
+        }
+      },
+      {
+        "@type": "Event",
+        "name": "Mini & Co. Sensory Play — Launch Class (Afternoon)",
+        "description": "The launch class for Mini & Co. — a calm, evidence-based sensory play class for babies 3–12 months and their mums, held at Oran Park Library.",
+        "startDate": "2026-06-24T13:00:00+10:00",
+        "endDate": "2026-06-24T13:45:00+10:00",
+        "eventStatus": "https://schema.org/EventScheduled",
+        "eventAttendanceMode": "https://schema.org/OfflineEventAttendanceMode",
+        "image": "https://miniandcosensoryclasses.com/assets/logo/instagram/logo-square-cream.png",
+        "location": {
+          "@type": "Place",
+          "name": "Oran Park Library — Sandown Room",
+          "address": {
+            "@type": "PostalAddress",
+            "streetAddress": "72 Central Ave",
+            "addressLocality": "Oran Park",
+            "addressRegion": "NSW",
+            "postalCode": "2570",
+            "addressCountry": "AU"
+          }
+        },
+        "organizer": {
+          "@type": "Organization",
+          "name": "Mini & Co.",
+          "url": "https://miniandcosensoryclasses.com/"
+        },
+        "offers": {
+          "@type": "Offer",
+          "url": "https://mini-co-sensory.classforkids.io",
+          "price": "25",
+          "priceCurrency": "AUD",
+          "availability": "https://schema.org/InStock",
+          "validFrom": "2026-05-14T00:00:00+10:00"
+        }
+      }
     ]
   }
   </script>
