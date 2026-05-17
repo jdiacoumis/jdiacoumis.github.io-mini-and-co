@@ -228,7 +228,7 @@ def build_svg() -> str:
   <text x="{WIDTH_MM / 2}" y="217" text-anchor="middle" class="display"
         font-size="9" fill="{PLUM}" letter-spacing="0.2">Founding class  ·  Wednesday 24 June  ·  $20</text>
   <text x="{WIDTH_MM / 2}" y="228" text-anchor="middle" class="display-italic"
-        font-size="7.5" fill="{TEXT_SOFT}" letter-spacing="0.2">Term 3 starts Wednesday 22 July</text>
+        font-size="7.5" fill="{TEXT_SOFT}" letter-spacing="0.2">Term 3 starts Wednesday 22 July  ·  $25 per class</text>
 
   <text x="{WIDTH_MM / 2}" y="240" text-anchor="middle" class="display-italic"
         font-size="6" fill="{TEXT_MUTED}" letter-spacing="0.2">Limited spots available</text>
