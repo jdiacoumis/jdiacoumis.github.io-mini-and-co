@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Static marketing site for **Mini & Co**, a sensory play class business for babies aged 3–12 months (Oran Park, NSW). Plain HTML + CSS + a tiny JS file. No framework, no bundler, no package manifest. Deployed as static hosting (CNAME → `miniandcosensoryclasses.com`).
+Static marketing site for **Mini & Co**, a sensory play class business for little ones aged 3–12 months (Oran Park, NSW). Plain HTML + CSS + a tiny JS file. No framework, no bundler, no package manifest. Deployed as static hosting (CNAME → `miniandcosensoryclasses.com`).
 
 ## Common commands
 
