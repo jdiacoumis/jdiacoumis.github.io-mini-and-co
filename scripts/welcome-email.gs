@@ -150,18 +150,21 @@ function setupTrigger() {
 }
 
 // TEST 1: Send a sample welcome email to yourself
-// Edit YOUR_TEST_EMAIL below before running
+// Set the TEST_EMAIL script property before running
 function testSendWelcomeEmail() {
   const props = PropertiesService.getScriptProperties();
   const pdfFileId = props.getProperty("PDF_FILE_ID");
   const fromName = props.getProperty("FROM_NAME") || "Camila";
+  const testEmail = props.getProperty("TEST_EMAIL");
+
+  if (!testEmail) {
+    throw new Error("TEST_EMAIL script property is not set.");
+  }
 
   const pdfBlob = DriveApp.getFileById(pdfFileId).getBlob();
 
-  const YOUR_TEST_EMAIL = "james.diacoumis2@gmail.com"; // change if you want
-
-  sendWelcomeEmail(YOUR_TEST_EMAIL, "Test Parent", pdfBlob, fromName);
-  console.log("Test email sent to " + YOUR_TEST_EMAIL);
+  sendWelcomeEmail(testEmail, "Test Parent", pdfBlob, fromName);
+  console.log("Test email sent to " + testEmail);
 }
 
 // TEST 2: Check Stripe connection — lists recent charges, sends nothing
@@ -211,7 +214,10 @@ function testFullFlowOnce() {
   ).getBlob();
   const fromName = props.getProperty("FROM_NAME") || "Camila";
 
-  const TEST_EMAIL = "james.diacoumis2@gmail.com"; // edit if you want
+  const TEST_EMAIL = props.getProperty("TEST_EMAIL");
+  if (!TEST_EMAIL) {
+    throw new Error("TEST_EMAIL script property is not set.");
+  }
   const TEST_NAME = "James D";
 
   // Same dedup check the real script uses
