@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="facebook-domain-verification" content="dhhbzfk4qlltsaijyhzlrhg9b5ot47">
   <title>Contact Mini &amp; Co. — Sensory Play Classes, Oran Park</title>
   <meta name="description" content="Get in touch with Mini & Co. — ask a question, send a hello, or follow along on Instagram. Book classes online via Class4Kids.">
   <meta name="theme-color" content="#faf6f1">
@@ -39,7 +40,10 @@
     s.parentNode.insertBefore(t,s)}(window, document,'script',
     'https://connect.facebook.net/en_US/fbevents.js');
     fbq('init', '1991468878409217');
-    fbq('track', 'PageView');
+    fbq('track', 'PageView', {}, {eventID: crypto.randomUUID()});
+    function trackLead() {
+      if (window.fbq) fbq('track', 'Lead', {}, {eventID: crypto.randomUUID()});
+    }
   </script>
   <noscript><img height="1" width="1" style="display:none"
     src="https://www.facebook.com/tr?id=1991468878409217&amp;ev=PageView&amp;noscript=1" alt=""></noscript>
@@ -113,7 +117,7 @@
         <h2>Saving your spot at a Wednesday class.</h2>
         <p>Bookings are now open. Pick a time that suits and book in directly.</p>
 
-        <a class="button" href="https://mini-co-sensory.classforkids.io" target="_blank" rel="noopener" onclick="if(window.fbq)fbq('track','Lead');">Book now</a>
+        <a class="button" href="https://mini-co-sensory.classforkids.io" target="_blank" rel="noopener" onclick="trackLead();">Book now</a>
       </div>
     </section>
 
