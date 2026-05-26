@@ -38,3 +38,6 @@ build/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Partnership packs — local-only artifacts not for the public site
+/partnerships/
