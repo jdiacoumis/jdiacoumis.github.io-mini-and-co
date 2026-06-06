@@ -45,6 +45,13 @@ PLUM = "#3d2a3d"
 TEXT_SOFT = "#6b5466"
 TEXT_MUTED = "#8d7d8a"
 ORNAMENT = "#b39db0"
+# Warm-blush "scan to book" panel — kept in sync with the panel in banner.svg.
+PANEL_BLUSH = "#eccfc3"
+PANEL_EYEBROW = "#a9786c"
+
+# Hero photograph (tracked, optimised via scripts/optimise-photos.py). Shared
+# subject with banner.svg so the flyer reads as part of the same family.
+HERO_IMG = REPO_ROOT / "assets" / "photos" / "hero-sensory-play-1600.jpg"
 
 QR_TARGET_URL = "https://miniandcosensoryclasses.com/"
 
@@ -58,6 +65,13 @@ def font_data_uri(filename: str) -> str:
     """
     data = (FONTS_DIR / filename).read_bytes()
     return "data:font/ttf;base64," + base64.b64encode(data).decode("ascii")
+
+
+def hero_data_uri() -> str:
+    """Return a base64 data: URI for the hero JPEG, so the flyer SVG stays
+    self-contained (no external file refs to resolve at render time)."""
+    data = HERO_IMG.read_bytes()
+    return "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")
 
 
 def logo_inner() -> str:
@@ -106,21 +120,23 @@ def build_svg() -> str:
     cormorant = font_data_uri("CormorantGaramond.ttf")
     cormorant_italic = font_data_uri("CormorantGaramond-Italic.ttf")
     outfit = font_data_uri("Outfit.ttf")
+    hero = hero_data_uri()
 
-    # QR ~28mm square — comfortably scannable from arm's length on A4 while
-    # leaving room for a left-hand contact column on the same row.
-    qr_side = 26
-    qr_x = WIDTH_MM - 20 - qr_side  # right-aligned to a 20mm margin
-    qr_y = 254
+    cx = WIDTH_MM / 2
+
+    # QR inside the warm-blush footer panel (234..280), right-aligned and
+    # vertically centred against the panel so it doesn't float to one corner.
+    qr_side = 27
+    qr_x = WIDTH_MM - 24 - qr_side   # ~4mm padding inside the panel's right edge
+    qr_y = 240                       # leaves room for the SCAN TO BOOK caption below
     qr_block = qr_svg_group(QR_TARGET_URL, qr_side, qr_x, qr_y)
 
     # Logo: nested SVG inheriting our coordinate system. The 0..400 viewBox
     # covers the wordmark's full glyph extents (see export-logo.py rationale).
-    logo_w = 70
-    logo_h = 70  # square viewBox keeps "Mini & Co. — sensory classes —" centred
+    logo_w = 60
+    logo_h = 60  # square viewBox keeps "Mini & Co. — sensory classes —" centred
     logo_x = (WIDTH_MM - logo_w) / 2
-    logo_y = 7  # lifted from the original 12mm so the logo + ornament read as
-                # a tight unit at the top, leaving the headline more breathing room
+    logo_y = 6
     logo_svg = (
         f'<svg x="{logo_x}" y="{logo_y}" width="{logo_w}" height="{logo_h}" '
         f'viewBox="0 0 400 400" preserveAspectRatio="xMidYMid meet">'
@@ -163,6 +179,7 @@ def build_svg() -> str:
       .body-medium   {{ font-family: 'Outfit', system-ui, sans-serif; font-weight: 400; }}
       .eyebrow       {{ font-family: 'Outfit', system-ui, sans-serif; font-weight: 400; letter-spacing: 0.45em; text-transform: uppercase; }}
     ]]></style>
+    <clipPath id="heroClip"><rect x="20" y="78" width="170" height="58" rx="5"/></clipPath>
   </defs>
 
   <!-- ===== BACKGROUND ===== -->
@@ -181,66 +198,47 @@ def build_svg() -> str:
   <!-- ===== LOGO ===== -->
   {logo_svg}
 
-  <!-- Hairline ornament under logo — tucked close to the wordmark (which ends
-       around y=74) so the ornament reads as part of the logo lockup rather
-       than a separator competing with the headline below. -->
-  <line x1="{WIDTH_MM / 2 - 14}" y1="80" x2="{WIDTH_MM / 2 + 14}" y2="80"
-        stroke="{ORNAMENT}" stroke-width="0.3"/>
-  <circle cx="{WIDTH_MM / 2}" cy="80" r="0.7" fill="{ORNAMENT}"/>
+  <!-- Hairline ornament under logo, tucked close to the wordmark. -->
+  <line x1="{cx - 12}" y1="72" x2="{cx + 12}" y2="72" stroke="{ORNAMENT}" stroke-width="0.3"/>
+  <circle cx="{cx}" cy="72" r="0.7" fill="{ORNAMENT}"/>
+
+  <!-- ===== HERO PHOTO ===== -->
+  <!-- Same subject as banner.svg. Slice-fills a letterbox band; swap the source
+       (assets/photos/hero-sensory-play-*) for the 24 June shots when ready. -->
+  <image xlink:href="{hero}" x="20" y="78" width="170" height="58"
+         preserveAspectRatio="xMidYMid slice" clip-path="url(#heroClip)"/>
+  <rect x="20" y="78" width="170" height="58" rx="5" fill="none" stroke="{ACCENT_SAGE}" stroke-width="0.4"/>
 
   <!-- ===== HEADLINE ===== -->
-  <!-- Trademark mitigation: the word pairing in the original mock is avoided
-       site-wide (see commit 80ed250); headline reads "Developmental Play". -->
-  <text x="{WIDTH_MM / 2}" y="112" text-anchor="middle" class="display-light"
-        font-size="22" fill="{PLUM}" letter-spacing="1">Developmental Play</text>
+  <text x="{cx}" y="153" text-anchor="middle" class="display-light"
+        font-size="16" fill="{PLUM}" letter-spacing="0.3">Sensory Play for Little Ones</text>
 
-  <!-- ===== TAGLINE ===== -->
-  <text x="{WIDTH_MM / 2}" y="125" text-anchor="middle" class="display-italic"
-        font-size="6.5" fill="{TEXT_SOFT}" letter-spacing="0.1">
-    <tspan x="{WIDTH_MM / 2}" dy="0">Evidence-based sensory play for little ones 3–12 months and their mums,</tspan>
-    <tspan x="{WIDTH_MM / 2}" dy="8">designed to support development, nurture connection,</tspan>
-    <tspan x="{WIDTH_MM / 2}" dy="8">and create a quiet, welcoming space to bond.</tspan>
-  </text>
+  <!-- ===== SUBTITLE (one short line — who it's for) ===== -->
+  <text x="{cx}" y="167" text-anchor="middle" class="display-italic"
+        font-size="6.5" fill="{TEXT_SOFT}" letter-spacing="0.2">For little ones 3–12 months &amp; their mums</text>
 
   <!-- ===== CLASS DETAILS ===== -->
-  <text x="{WIDTH_MM / 2}" y="161" text-anchor="middle" class="display-light"
-        font-size="12" fill="{TEXT_SOFT}" letter-spacing="0.6">Wednesdays  ·  11 AM &amp; 1 PM</text>
-  <text x="{WIDTH_MM / 2}" y="170" text-anchor="middle" class="display-italic"
-        font-size="7.5" fill="{TEXT_SOFT}" letter-spacing="0.2">Oran Park Library  ·  Sandown Room</text>
+  <text x="{cx}" y="184" text-anchor="middle" class="display-light"
+        font-size="11" fill="{TEXT_SOFT}" letter-spacing="0.6">Wednesdays  ·  11 AM &amp; 1 PM</text>
+  <text x="{cx}" y="194" text-anchor="middle" class="display-italic"
+        font-size="7" fill="{TEXT_SOFT}" letter-spacing="0.2">Oran Park Library  ·  Sandown Room</text>
 
-  <!-- ===== PILLARS ===== -->
-  <!-- Ornament line sits clear above the text's cap-height — at font-size 8
-       the Cormorant cap-top is ~5.6mm above the baseline, so a 6mm gap from
-       line→baseline keeps the rule from clipping the glyphs. -->
-  <line x1="30" y1="180" x2="80" y2="180" stroke="{LINE}" stroke-width="0.3"/>
-  <line x1="{WIDTH_MM - 80}" y1="180" x2="{WIDTH_MM - 30}" y2="180" stroke="{LINE}" stroke-width="0.3"/>
-  <circle cx="{WIDTH_MM / 2}" cy="180" r="0.7" fill="{ORNAMENT}"/>
-  <text x="{WIDTH_MM / 2}" y="190" text-anchor="middle" class="display-light"
-        font-size="8" fill="{TEXT_SOFT}" letter-spacing="0.3">Development  ·  Connection  ·  Calm  ·  Community</text>
-
-  <!-- ===== NOW ENROLLING ===== -->
-  <text x="{WIDTH_MM / 2}" y="203" text-anchor="middle" class="eyebrow"
+  <!-- ===== NOW ENROLLING (dated — the flyer carries what the banner omits) ===== -->
+  <text x="{cx}" y="209" text-anchor="middle" class="eyebrow"
         font-size="5" fill="{TEXT_MUTED}">Now enrolling</text>
-  <line x1="{WIDTH_MM / 2 - 14}" y1="207" x2="{WIDTH_MM / 2 + 14}" y2="207" stroke="{ORNAMENT}" stroke-width="0.3"/>
-  <circle cx="{WIDTH_MM / 2}" cy="207" r="0.7" fill="{ORNAMENT}"/>
+  <line x1="{cx - 14}" y1="213" x2="{cx + 14}" y2="213" stroke="{ORNAMENT}" stroke-width="0.3"/>
+  <circle cx="{cx}" cy="213" r="0.7" fill="{ORNAMENT}"/>
 
-  <!-- Date block: 11mm display→italic leading, 12mm into the muted footnote. -->
-  <text x="{WIDTH_MM / 2}" y="217" text-anchor="middle" class="display"
-        font-size="9" fill="{PLUM}" letter-spacing="0.2">Founding class  ·  Wednesday 24 June  ·  $20</text>
-  <text x="{WIDTH_MM / 2}" y="228" text-anchor="middle" class="display-italic"
-        font-size="7.5" fill="{TEXT_SOFT}" letter-spacing="0.2">Term 3 starts Wednesday 22 July  ·  $25 per class</text>
+  <text x="{cx}" y="224" text-anchor="middle" class="display"
+        font-size="11" fill="{PLUM}" letter-spacing="0.2">Term 3 begins  ·  Wednesday 22 July</text>
 
-  <text x="{WIDTH_MM / 2}" y="240" text-anchor="middle" class="display-italic"
-        font-size="6" fill="{TEXT_MUTED}" letter-spacing="0.2">Limited spots available</text>
+  <!-- ===== BOOK NOW PANEL (warm blush) — booking CTA + key contacts ===== -->
+  <rect x="20" y="234" width="170" height="46" rx="5" fill="{PANEL_BLUSH}"/>
 
-  <!-- ===== BOOKINGS & ENQUIRIES ===== -->
-  <text x="{WIDTH_MM / 2}" y="252" text-anchor="middle" class="eyebrow"
-        font-size="5" fill="{TEXT_MUTED}">Bookings &amp; enquiries</text>
+  <text x="30" y="249" class="display" font-size="11" fill="{PLUM}" letter-spacing="0.2">Scan to book online</text>
 
-  <!-- Contact column on the left, QR on the right. Contacts vertically
-       centred against the QR block ({qr_side}mm tall, {qr_y}..{qr_y + qr_side}). -->
-  <!-- Row 1: Website -->
-  <g transform="translate(20, 258)">
+  <!-- Website, Instagram, email -->
+  <g transform="translate(30, 256)">
     <g fill="none" stroke="{PLUM}" stroke-width="0.4" stroke-linecap="round" stroke-linejoin="round">
       <circle cx="3" cy="3" r="2.6"/>
       <ellipse cx="3" cy="3" rx="1.05" ry="2.6"/>
@@ -248,32 +246,30 @@ def build_svg() -> str:
       <path d="M0.85 1.5 Q 3 2.3 5.15 1.5"/>
       <path d="M0.85 4.5 Q 3 3.7 5.15 4.5"/>
     </g>
-    <text x="9" y="4.4" class="body-medium" font-size="3.4" fill="{PLUM}">miniandcosensoryclasses.com</text>
+    <text x="9" y="4.4" class="body-medium" font-size="3.6" fill="{PLUM}">miniandcosensoryclasses.com</text>
   </g>
-
-  <!-- Row 2: Instagram -->
-  <g transform="translate(20, 267)">
+  <g transform="translate(30, 264)">
     <g fill="none" stroke="{PLUM}" stroke-width="0.4" stroke-linecap="round" stroke-linejoin="round">
       <rect x="0.4" y="0.4" width="5.2" height="5.2" rx="1.3"/>
       <circle cx="3" cy="3" r="1.25"/>
       <circle cx="4.5" cy="1.5" r="0.32" fill="{PLUM}"/>
     </g>
-    <text x="9" y="4.4" class="body-medium" font-size="3.4" fill="{PLUM}">@miniandco.classes</text>
+    <text x="9" y="4.4" class="body-medium" font-size="3.6" fill="{PLUM}">@miniandco.classes</text>
   </g>
-
-  <!-- Row 3: Email -->
-  <g transform="translate(20, 276)">
+  <g transform="translate(30, 272)">
     <g fill="none" stroke="{PLUM}" stroke-width="0.4" stroke-linecap="round" stroke-linejoin="round">
       <rect x="0.4" y="1" width="5.2" height="4" rx="0.5"/>
       <path d="M0.4 1.5 L3 3.5 L5.6 1.5"/>
     </g>
-    <text x="9" y="4.4" class="body-medium" font-size="3.4" fill="{PLUM}">miniandco.classes@gmail.com</text>
+    <text x="9" y="4.4" class="body-medium" font-size="3.6" fill="{PLUM}">miniandco.classes@gmail.com</text>
   </g>
+
+  <!-- QR caption -->
+  <text x="{qr_x + qr_side / 2}" y="{qr_y + qr_side + 3}" text-anchor="middle"
+        class="body" font-size="2.6" fill="{PANEL_EYEBROW}" letter-spacing="0.6">SCAN TO BOOK</text>
 
   <!-- ===== QR CODE ===== -->
   {qr_block}
-  <text x="{qr_x + qr_side / 2}" y="{qr_y + qr_side + 3.5}" text-anchor="middle"
-        class="body" font-size="2.6" fill="{TEXT_MUTED}" letter-spacing="0.6">SCAN TO BOOK</text>
 
 </svg>
 """
