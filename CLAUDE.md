@@ -21,6 +21,7 @@ Asset exports (require `cairosvg`, `pillow`, and `segno` — `cairosvg`/`pillow`
 ```bash
 python3 scripts/export-banner.py            # 850×2000mm pull-up banner → assets/banner/banner.png
 python3 scripts/export-banner.py --dpi 200  # higher-res override
+python3 scripts/export-banner.py --print-size 841x2055  # + exact print-spec canvas (Officeworks) → assets/banner/banner-print-841x2055.png
 python3 scripts/export-flyer.py             # A4 portrait flyer → assets/flyer/flyer.{svg,png}
 python3 scripts/export-flyer.py --dpi 300   # higher-res override (default 200)
 python3 scripts/export-logo.py              # Instagram tile variants → assets/logo/instagram/
