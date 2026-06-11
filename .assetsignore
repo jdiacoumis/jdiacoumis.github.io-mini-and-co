@@ -1,0 +1,18 @@
+# Paths the Cloudflare Worker must NEVER upload or serve as public static assets.
+# Security: keeps source, specs, tooling and local-only material off the public site.
+.git
+.gitignore
+.claude
+.devcontainer
+.assetsignore
+booking
+openspec
+scripts
+photos-staging
+partnerships
+fonts
+node_modules
+CLAUDE.md
+README.md
+CNAME
+.nojekyll
