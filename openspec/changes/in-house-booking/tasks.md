@@ -11,7 +11,12 @@
 ## 2. Features
 
 - [x] 2.1 Auth routes: request magic link (rate-limited, no enumeration), verify via POST (scanner-safe), logout, session cookie lifecycle
-- [ ] 2.2 Parent flow: public class list with availability, profile + child CRUD (ownership enforced), checkout review with waiver/consent snapshot, payment redirect, confirmation page with status polling, parent dashboard
+- [~] 2.2 Parent flow: public class list with availability, profile + child CRUD (ownership enforced), checkout review with waiver/consent snapshot, payment redirect, confirmation page with status polling, parent dashboard
+  - [x] Child profile CRUD (add, edit, delete)
+  - [ ] Public class list with availability
+  - [ ] Checkout flow with waiver/consent
+  - [ ] Payment redirect and confirmation
+  - [ ] Parent dashboard
 - [ ] 2.3 Admin portal: dashboard with fullness, class/session CRUD + weekly repeat, per-session roster (contacts, child age, consents, medical, payment status), bookings list with filters, mark-paid/cancel, customers, CSV export
 - [ ] 2.4 Stripe webhook endpoint: signature verification, replay protection, idempotent confirm; dev-only mock checkout + mailbox pages
 - [ ] 2.5 Meta Pixel: first-party bootstrap (CSP-clean), funnel events, Purchase-once on confirmation, CAPI dedup from webhook; remove Lead-on-click from marketing pages
