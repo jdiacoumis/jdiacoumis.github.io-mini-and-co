@@ -1,0 +1,116 @@
+/* Booking pages stylesheet — extends the main site styles. */
+
+.booking-main {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: var(--space-md);
+}
+
+.error-container {
+  text-align: center;
+  padding: var(--space-2xl) var(--space-md);
+  border: 1px solid var(--colour-line);
+  border-radius: var(--radius-md);
+  background-color: var(--colour-bg-blush);
+}
+
+.error-container h1 {
+  font-size: 4rem;
+  font-weight: 300;
+  margin: 0 0 var(--space-sm) 0;
+  color: var(--colour-accent-blush);
+}
+
+.error-container h2 {
+  font-size: 1.5rem;
+  font-weight: 400;
+  margin: 0 0 var(--space-md) 0;
+  color: var(--colour-text);
+}
+
+.error-container p {
+  margin: var(--space-md) 0;
+  color: var(--colour-text-soft);
+}
+
+.error-container details {
+  margin-top: var(--space-md);
+  background-color: var(--colour-bg);
+  padding: var(--space-md);
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+
+.error-container pre {
+  overflow-x: auto;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--colour-text-muted);
+}
+
+/* Form styling (to be extended as features are built). */
+form {
+  max-width: var(--max-width-narrow);
+  margin: var(--space-xl) auto;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="tel"],
+input[type="date"],
+input[type="time"],
+textarea,
+select {
+  width: 100%;
+  padding: var(--space-sm);
+  border: 1px solid var(--colour-line);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-body);
+  font-size: 1rem;
+  background-color: var(--colour-bg);
+  color: var(--colour-text);
+  margin-bottom: var(--space-md);
+}
+
+input[type="text"]:focus,
+input[type="email"]:focus,
+input[type="tel"]:focus,
+input[type="date"]:focus,
+input[type="time"]:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--colour-accent-sage);
+  box-shadow: 0 0 0 3px rgba(174, 189, 161, 0.1);
+}
+
+button {
+  padding: var(--space-sm) var(--space-md);
+  background-color: var(--colour-accent-sage);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-weight: 500;
+  transition: background-color var(--transition);
+}
+
+button:hover {
+  background-color: #98ad8a;
+}
+
+button:active {
+  transform: scale(0.98);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Loading state. */
+.loading {
+  opacity: 0.6;
+  pointer-events: none;
+}

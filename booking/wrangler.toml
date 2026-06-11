@@ -1,0 +1,37 @@
+# Mini & Co. — one Worker serves the static marketing site (as assets) plus the
+# booking app (/book, /account, /admin, /api). See DEPLOYMENT.md for setup.
+name = "miniandco-site"
+main = "src/index.js"
+compatibility_date = "2026-05-01"
+
+# The asset directory is the repo root: the existing static site is served as-is.
+# Paths listed in /.assetsignore (repo root) are never uploaded or served.
+[assets]
+directory = ".."
+binding = "ASSETS"
+html_handling = "auto-trailing-slash"
+not_found_handling = "none"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "miniandco-booking"
+# Local dev ignores this id. For production: `wrangler d1 create miniandco-booking`
+# and paste the real id here before `wrangler deploy`.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# Production configuration. Local development overrides these via .dev.vars.
+# Secrets are NOT set here — use `wrangler secret put <NAME>` for:
+#   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, RESEND_API_KEY, META_CAPI_TOKEN (optional)
+[vars]
+ENVIRONMENT = "production"
+EMAIL_DRIVER = "resend"
+PAYMENTS_DRIVER = "stripe"
+PUBLIC_BASE_URL = "https://miniandcosensoryclasses.com"
+EMAIL_FROM = "Mini & Co. <bookings@miniandcosensoryclasses.com>"
+ADMIN_EMAILS = "miniandco.classes@gmail.com"
+META_PIXEL_ID = "1991468878409217"
+WAIVER_VERSION = "2026-06"
+
+[observability.logs]
+enabled = true
