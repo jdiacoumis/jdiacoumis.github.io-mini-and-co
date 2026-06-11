@@ -11,16 +11,18 @@ assuming 72 DPI.
 
 Run from the repo root:  python3 scripts/export-banner.py
 Optional:                python3 scripts/export-banner.py --dpi 200
-Print-shop canvas:       python3 scripts/export-banner.py --print-size 841x2055
+Print-shop canvas:       python3 scripts/export-banner.py --print-size 841x2055 --dpi 300
 
-`--print-size` produces an additional file sized to an exact print spec
-(e.g. Officeworks pull-up banners want 841 mm × 2055 mm — the extra height
-beyond the visible ~2000 mm wraps into the roller cassette). The artwork is
-scaled to fit without distortion, top-aligned, and the leftover strip is
-filled with the banner's cream background so it blends into the cassette.
+With `--print-size`, the script exports ONLY a file sized to an exact print
+spec (e.g. Officeworks pull-up banners want 841 mm × 2055 mm — the extra
+height beyond the visible ~2000 mm wraps into the roller cassette), leaving
+banner.png untouched so the repo copy can stay at a web-friendly DPI. The
+artwork is scaled to fit without distortion, top-aligned, and the leftover
+strip is filled with the banner's cream background so it blends into the
+cassette.
 
 Output: assets/banner/banner.png
-        assets/banner/banner-print-<W>x<H>.png (with --print-size)
+        assets/banner/banner-print-<W>x<H>.png (with --print-size, instead)
 """
 
 from __future__ import annotations
@@ -46,10 +48,17 @@ MM_PER_INCH = 25.4
 # Must match the base <rect fill> in banner.svg (--colour-bg in css/styles.css).
 BACKGROUND_COLOUR = "#faf6f1"
 
-# Bounds chosen so a mistyped DPI can't request an absurd render: 600 DPI on a
-# 2 m banner is already ~48k px tall, near Pillow's decompression-bomb ceiling.
+# Bounds chosen so a mistyped DPI can't request an absurd render. 300 DPI is
+# already beyond what roller-banner substrate resolves; it exists to satisfy
+# print-shop preflight checks, not to add visible detail.
 MIN_DPI = 36
-MAX_DPI = 600
+MAX_DPI = 300
+
+# A 300 DPI render of the 2 m banner is ~241 megapixels, which crosses
+# Pillow's default decompression-bomb threshold (~179 MP). The input here is
+# our own freshly-rendered SVG, not an untrusted file, so raise the ceiling
+# just enough to cover MAX_DPI renders while keeping a hard cap in place.
+Image.MAX_IMAGE_PIXELS = 400_000_000
 
 
 def mm_to_px(mm: float, dpi: int) -> int:
@@ -141,13 +150,15 @@ def main() -> None:
                         help="Output resolution in dots per inch (default: 150).")
     parser.add_argument("--print-size", type=parse_print_size, default=None,
                         metavar="WxH",
-                        help="Also export on an exact print canvas in millimetres, "
-                             "e.g. 841x2055 (Officeworks pull-up banner spec).")
+                        help="Export only an exact print canvas in millimetres, "
+                             "e.g. 841x2055 (Officeworks pull-up banner spec); "
+                             "banner.png is left untouched.")
     args = parser.parse_args()
 
-    export_native(args.dpi)
     if args.print_size:
         export_print_canvas(args.dpi, *args.print_size)
+    else:
+        export_native(args.dpi)
 
 
 if __name__ == "__main__":
