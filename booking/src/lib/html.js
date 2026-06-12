@@ -102,6 +102,7 @@ export function layout(title, bodyHtml, { user = null, extraHead = '' } = {}) {
   <footer class="booking-footer">
     <p>&copy; 2026 Mini &amp; Co. Sensory Classes · Oran Park, NSW</p>
   </footer>
+  <script src="/js/booking-pixel.js" defer></script>
 </body>
 </html>`;
 }

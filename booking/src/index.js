@@ -82,7 +82,7 @@ const SECURITY_HEADERS = {
     "img-src 'self' https://www.facebook.com data:",
     "style-src 'self' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com",
-    "connect-src 'self'",
+    "connect-src 'self' https://www.facebook.com https://connect.facebook.net",
     "form-action 'self' https://checkout.stripe.com",
     "frame-ancestors 'none'",
     "base-uri 'self'",
