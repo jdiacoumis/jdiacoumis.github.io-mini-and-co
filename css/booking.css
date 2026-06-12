@@ -397,6 +397,65 @@ button:active {
 .status-cancelled,
 .status-expired { background-color: var(--colour-line-soft); color: var(--colour-text-muted); }
 
+/* --- Admin --- */
+
+.admin-nav {
+  display: flex;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--colour-line);
+  padding-bottom: var(--space-xs);
+  margin-bottom: var(--space-md);
+}
+
+.admin-nav a {
+  color: var(--colour-text-soft);
+  text-decoration: none;
+  font-size: 0.95rem;
+}
+
+.admin-nav a:hover {
+  color: var(--colour-text);
+}
+
+.form-notice {
+  background-color: var(--colour-bg-sage);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.inline-form {
+  display: inline-block;
+  margin: var(--space-2xs) 0;
+}
+
+.button-small {
+  padding: 0.2rem 0.8rem;
+  font-size: 0.85rem;
+}
+
+.filter-links a {
+  margin-right: var(--space-2xs);
+}
+
+.filter-active {
+  font-weight: 600;
+}
+
+.muted {
+  color: var(--colour-text-muted);
+  font-size: 0.85rem;
+}
+
+.row-cancelled {
+  opacity: 0.55;
+}
+
+.roster-medical {
+  max-width: 18rem;
+  white-space: pre-line;
+}
+
 /* --- Misc --- */
 
 .account-section {

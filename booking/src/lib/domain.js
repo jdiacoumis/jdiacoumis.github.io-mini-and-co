@@ -278,3 +278,19 @@ export async function listOpenClasses(env) {
 export function formatAud(cents) {
   return `$${(cents / 100).toFixed(2)}`;
 }
+
+// Admin schedule view: sessions with live fullness (confirmed + unexpired
+// pending bookings count; lapsed pending and cancelled never count).
+export async function listSessionsWithFullness(env, { upcomingOnly = true } = {}) {
+  const now = nowIso();
+  const rows = await env.DB.prepare(
+    `SELECT cs.id, cs.class_id, cs.starts_at, cs.duration_mins, cs.capacity,
+            cs.price_cents, cs.status, c.name AS class_name, c.active AS class_active,
+            (${HELD_SEATS_SQL.replace('?#NOW#', '?1')}) AS seats_held
+     FROM class_sessions cs
+     JOIN classes c ON c.id = cs.class_id
+     ${upcomingOnly ? 'WHERE cs.starts_at > ?1' : ''}
+     ORDER BY cs.starts_at`,
+  ).bind(now).all();
+  return rows.results || [];
+}

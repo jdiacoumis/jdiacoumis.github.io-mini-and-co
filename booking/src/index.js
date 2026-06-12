@@ -39,6 +39,27 @@ import {
   handleProfile,
   handleProfilePost,
 } from './routes/account.js';
+import {
+  handleAdminDashboard,
+  handleAdminClasses,
+  handleAdminClassNew,
+  handleAdminClassNewPost,
+  handleAdminClassEdit,
+  handleAdminClassEditPost,
+  handleAdminSessionNew,
+  handleAdminSessionNewPost,
+  handleAdminSessionEdit,
+  handleAdminSessionEditPost,
+  handleAdminRoster,
+  handleAdminRosterCsv,
+} from './routes/admin.js';
+import {
+  handleAdminBookings,
+  handleAdminMarkPaid,
+  handleAdminCancelBooking,
+  handleAdminBookingsCsv,
+  handleAdminCustomers,
+} from './routes/admin-bookings.js';
 
 // Security headers applied to every dynamic response (defence in depth: CSP
 // allows only same-origin scripts plus the Meta pixel, forms may only post to
@@ -152,6 +173,25 @@ route('GET', '/account/children/:id/edit', handleEditChild);
 route('POST', '/account/children/:id/edit', handleEditChildPost);
 route('GET', '/account/children/:id/delete', handleDeleteChild);
 route('POST', '/account/children/:id/delete', handleDeleteChildPost);
+
+// Admin portal.
+route('GET', '/admin', handleAdminDashboard);
+route('GET', '/admin/classes', handleAdminClasses);
+route('GET', '/admin/classes/new', handleAdminClassNew);
+route('POST', '/admin/classes/new', handleAdminClassNewPost);
+route('GET', '/admin/classes/:id/edit', handleAdminClassEdit);
+route('POST', '/admin/classes/:id/edit', handleAdminClassEditPost);
+route('GET', '/admin/sessions/new', handleAdminSessionNew);
+route('POST', '/admin/sessions/new', handleAdminSessionNewPost);
+route('GET', '/admin/sessions/:id/edit', handleAdminSessionEdit);
+route('POST', '/admin/sessions/:id/edit', handleAdminSessionEditPost);
+route('GET', '/admin/sessions/:id/roster', handleAdminRoster);
+route('POST', '/admin/sessions/:id/roster.csv', handleAdminRosterCsv);
+route('GET', '/admin/bookings', handleAdminBookings);
+route('POST', '/admin/bookings/:id/mark-paid', handleAdminMarkPaid);
+route('POST', '/admin/bookings/:id/cancel', handleAdminCancelBooking);
+route('POST', '/admin/bookings.csv', handleAdminBookingsCsv);
+route('GET', '/admin/customers', handleAdminCustomers);
 
 // APIs.
 route('GET', '/api/health', async () => Response.json({ ok: true }));
