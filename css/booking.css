@@ -177,6 +177,26 @@ button:active {
   color: var(--colour-text);
 }
 
+/* --- Page header with action --- */
+
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.page-head h1 {
+  margin: 0;
+}
+
+.account-signed-in {
+  color: var(--colour-text-muted);
+  font-size: 0.9rem;
+  margin-top: var(--space-2xs);
+}
+
 /* --- Class list --- */
 
 .class-card {
@@ -196,6 +216,62 @@ button:active {
   color: var(--colour-text-muted);
   font-size: 0.9rem;
   margin-top: calc(-1 * var(--space-2xs));
+}
+
+.trial-line {
+  background-color: var(--colour-bg-sage);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.term-group {
+  border-top: 1px solid var(--colour-line-soft);
+  margin-top: var(--space-md);
+  padding-top: var(--space-xs);
+}
+
+.term-group h3 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 1.25rem;
+  margin: var(--space-xs) 0;
+}
+
+.term-range {
+  color: var(--colour-text-muted);
+  font-family: var(--font-body);
+  font-weight: 300;
+  font-size: 0.9rem;
+}
+
+.slot-group {
+  margin: var(--space-sm) 0;
+}
+
+.slot-group h4 {
+  margin: 0 0 var(--space-2xs);
+  font-weight: 500;
+}
+
+.slot-sessions {
+  margin-top: var(--space-xs);
+}
+
+.slot-sessions summary {
+  cursor: pointer;
+  color: var(--colour-text-soft);
+  font-size: 0.9rem;
+}
+
+.term-list {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-xs) 0;
+}
+
+.term-list li {
+  padding: var(--space-2xs) 0;
+  border-top: 1px solid var(--colour-line-soft);
 }
 
 .session-list {
@@ -419,7 +495,21 @@ button:active {
 /* --- Misc --- */
 
 .account-section {
-  margin: var(--space-lg) 0;
+  margin: var(--space-md) 0;
+}
+
+.account-section h2 {
+  margin: var(--space-sm) 0 var(--space-2xs);
+}
+
+.account-children {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-2xs) 0;
+}
+
+.account-children li {
+  padding: var(--space-2xs) 0;
 }
 
 .notice-list {

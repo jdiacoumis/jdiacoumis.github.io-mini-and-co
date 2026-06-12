@@ -44,6 +44,23 @@ export async function loadSessionsForBooking(env, sessionIds) {
   });
 }
 
+// Sessions among `sessionIds` in which this child already holds a seat
+// (confirmed, or pending within its hold) — used to block double-booking the
+// same child into the same session.
+export async function sessionsAlreadyBookedForChild(env, childId, sessionIds) {
+  if (!sessionIds.length) return new Set();
+  const now = nowIso();
+  const placeholders = sessionIds.map((_, i) => `?${i + 3}`).join(', ');
+  const rows = await env.DB.prepare(
+    `SELECT DISTINCT bs.session_id FROM bookings b
+     JOIN booking_sessions bs ON bs.booking_id = b.id
+     WHERE b.child_id = ?1
+       AND bs.session_id IN (${placeholders})
+       AND (b.status = 'confirmed' OR (b.status = 'pending' AND b.expires_at > ?2))`,
+  ).bind(childId, now, ...sessionIds).all();
+  return new Set((rows.results || []).map((r) => r.session_id));
+}
+
 // Create a pending booking holding seats in one or more sessions, atomically.
 //
 // D1 has no interactive transactions; a batch() is atomic and rolls back
@@ -61,6 +78,16 @@ export async function createPendingBooking(env, {
   const unavailable = sessions.filter((s) => !s.bookable);
   if (unavailable.length) {
     return { error: 'unavailable', sessions: unavailable };
+  }
+
+  // A child may hold at most one seat per session: a clear error here, and a
+  // matching race-proof clause inside the guarded insert below.
+  const duplicates = await sessionsAlreadyBookedForChild(env, childId, unique);
+  if (duplicates.size) {
+    return {
+      error: 'already_booked',
+      sessions: sessions.filter((s) => duplicates.has(s.id)).map((s) => ({ ...s, reason: 'already_booked' })),
+    };
   }
 
   const bookingId = uuid();
@@ -84,8 +111,13 @@ export async function createPendingBooking(env, {
        JOIN classes c ON c.id = cs.class_id
        WHERE cs.id = ?2 AND cs.status = 'scheduled' AND c.active = 1
          AND cs.starts_at > ?3
-         AND cs.capacity > (${HELD_SEATS_SQL.replace('?#NOW#', '?3')})`,
-    ).bind(bookingId, sessionId, now)),
+         AND cs.capacity > (${HELD_SEATS_SQL.replace('?#NOW#', '?3')})
+         AND NOT EXISTS (
+           SELECT 1 FROM bookings b2
+           JOIN booking_sessions bs2 ON bs2.booking_id = b2.id
+           WHERE bs2.session_id = cs.id AND b2.child_id = ?4 AND b2.id != ?1
+             AND (b2.status = 'confirmed' OR (b2.status = 'pending' AND b2.expires_at > ?3)))`,
+    ).bind(bookingId, sessionId, now, childId)),
 
     env.DB.prepare(
       `INSERT INTO txn_guards (id)
@@ -99,10 +131,14 @@ export async function createPendingBooking(env, {
   try {
     await env.DB.batch(statements);
   } catch (err) {
-    // CHECK violation on txn_guards: a seat was lost to a concurrent booking
-    // between page load and submit. Report which sessions are now full.
+    // CHECK violation on txn_guards: a seat was lost between page load and
+    // submit — either to a concurrent booking (full) or to a concurrent
+    // duplicate for the same child. Diagnose which for the message.
     const after = await loadSessionsForBooking(env, unique);
-    const lost = after.filter((s) => !s.bookable);
+    const dupAfter = await sessionsAlreadyBookedForChild(env, childId, unique);
+    const lost = after
+      .map((s) => (dupAfter.has(s.id) ? { ...s, bookable: false, reason: 'already_booked' } : s))
+      .filter((s) => !s.bookable);
     logEvent('booking_capacity_conflict', { user_id: userId.slice(0, 8) });
     return { error: 'capacity', sessions: lost.length ? lost : after };
   }
@@ -243,6 +279,7 @@ export async function listOpenClasses(env) {
   const rows = await env.DB.prepare(
     `SELECT c.id AS class_id, c.name, c.description, c.venue, c.age_range,
             cs.id AS session_id, cs.starts_at, cs.duration_mins, cs.price_cents, cs.capacity,
+            cs.term_label,
             (${HELD_SEATS_SQL.replace('?#NOW#', '?1')}) AS seats_held
      FROM classes c
      JOIN class_sessions cs ON cs.class_id = c.id
@@ -270,6 +307,7 @@ export async function listOpenClasses(env) {
       capacity: row.capacity,
       seatsHeld: row.seats_held,
       seatsLeft: Math.max(0, row.capacity - row.seats_held),
+      termLabel: row.term_label || '',
     });
   }
   return [...classes.values()];
@@ -311,7 +349,7 @@ export async function listSessionsWithFullness(env, { upcomingOnly = true } = {}
   const now = nowIso();
   const rows = await env.DB.prepare(
     `SELECT cs.id, cs.class_id, cs.starts_at, cs.duration_mins, cs.capacity,
-            cs.price_cents, cs.status, c.name AS class_name, c.active AS class_active,
+            cs.price_cents, cs.status, cs.term_label, c.name AS class_name, c.active AS class_active,
             (${HELD_SEATS_SQL.replace('?#NOW#', '?1')}) AS seats_held
      FROM class_sessions cs
      JOIN classes c ON c.id = cs.class_id

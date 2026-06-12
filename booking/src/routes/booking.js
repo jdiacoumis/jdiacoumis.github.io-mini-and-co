@@ -10,11 +10,11 @@ import { html, pageResponse, csrfField, joinHtml } from '../lib/html.js';
 import { requireAuth, requireAuthOrRedirect, requireCsrf, parseForm } from '../lib/middleware.js';
 import { redirect, notFound, badRequest } from '../lib/http.js';
 import { isValidId, isYesNo, cleanText } from '../lib/validate.js';
-import { formatSydney } from '../lib/time.js';
+import { formatSydney, sydneyWeekday } from '../lib/time.js';
 import {
   listOpenClasses, loadSessionsForBooking, createPendingBooking, attachPaymentRef,
   confirmBooking, getOwnedBooking, effectiveStatus, expireBooking,
-  sweepExpiredBookings, formatAud,
+  sweepExpiredBookings, sessionsAlreadyBookedForChild, formatAud,
 } from '../lib/domain.js';
 import { getPaymentsDriver } from '../lib/payments-driver.js';
 import { allowRate } from '../lib/ratelimit.js';
@@ -34,27 +34,76 @@ function sessionLine(s) {
   return html`${formatSydney(s.starts_at ?? s.startsAt)} · ${s.duration_mins ?? s.durationMins} min`;
 }
 
-// GET /book — public class list with live availability.
+function sessionCheckboxRow(s) {
+  const full = s.seatsLeft === 0;
+  const availability = full
+    ? html`<span class="session-full">Full</span>`
+    : html`<span class="session-spots">${s.seatsLeft} ${s.seatsLeft === 1 ? 'spot' : 'spots'} left</span>`;
+  return html`
+    <li class="session-option ${full ? 'session-option-full' : ''}">
+      <label>
+        <input type="checkbox" name="session" value="${s.id}" ${full ? 'disabled' : ''}>
+        <span class="session-when">${formatSydney(s.startsAt)}</span>
+        <span class="session-meta">${s.durationMins} min · ${formatAud(s.priceCents)}</span>
+        ${availability}
+      </label>
+    </li>
+  `;
+}
+
+function checkoutLink(sessions) {
+  return `/book/checkout?${sessions.map((s) => `session=${encodeURIComponent(s.id)}`).join('&')}`;
+}
+
+// GET /book — public class list, organised by term and weekly time slot,
+// with whole-term booking and a single-session trial as the headline actions.
 export async function handleClassList(req, env) {
   const user = await requireAuth(req, env);
   await sweepExpiredBookings(env);
   const classes = await listOpenClasses(env);
 
   const classCards = classes.map((cls) => {
-    const sessionRows = cls.sessions.map((s) => {
-      const full = s.seatsLeft === 0;
-      const availability = full
-        ? html`<span class="session-full">Full</span>`
-        : html`<span class="session-spots">${s.seatsLeft} ${s.seatsLeft === 1 ? 'spot' : 'spots'} left</span>`;
+    // Sessions arrive sorted by start time; group term → weekly slot.
+    const terms = new Map();
+    for (const s of cls.sessions) {
+      const termKey = s.termLabel || 'Upcoming sessions';
+      if (!terms.has(termKey)) terms.set(termKey, new Map());
+      const slots = terms.get(termKey);
+      const slotKey = `${sydneyWeekday(s.startsAt)}s at ${formatSydney(s.startsAt, 'time')}`;
+      if (!slots.has(slotKey)) slots.set(slotKey, []);
+      slots.get(slotKey).push(s);
+    }
+
+    const nextAvailable = cls.sessions.find((s) => s.seatsLeft > 0);
+
+    const termBlocks = [...terms.entries()].map(([label, slots]) => {
+      const all = [...slots.values()].flat().sort((a, b) => (a.startsAt < b.startsAt ? -1 : 1));
+      const range = `${formatSydney(all[0].startsAt, 'date')} – ${formatSydney(all[all.length - 1].startsAt, 'date')}`;
+
+      const slotBlocks = [...slots.entries()].map(([slotLabel, list]) => {
+        const bookable = list.filter((s) => s.seatsLeft > 0);
+        const total = bookable.reduce((sum, s) => sum + s.priceCents, 0);
+        return html`
+          <div class="slot-group">
+            <h4>${slotLabel}</h4>
+            ${bookable.length > 1 ? html`
+              <a class="button-link button-small" href="${checkoutLink(bookable)}">
+                Book the full term — ${bookable.length} sessions · ${formatAud(total)}
+              </a>
+            ` : ''}
+            <details class="slot-sessions">
+              <summary>Pick individual dates instead</summary>
+              <ul class="session-list">${joinHtml(list.map(sessionCheckboxRow))}</ul>
+            </details>
+          </div>
+        `;
+      });
+
       return html`
-        <li class="session-option ${full ? 'session-option-full' : ''}">
-          <label>
-            <input type="checkbox" name="session" value="${s.id}" ${full ? 'disabled' : ''}>
-            <span class="session-when">${formatSydney(s.startsAt)}</span>
-            <span class="session-meta">${s.durationMins} min · ${formatAud(s.priceCents)}</span>
-            ${availability}
-          </label>
-        </li>
+        <div class="term-group">
+          <h3>${label} <span class="term-range">· ${range}</span></h3>
+          ${joinHtml(slotBlocks)}
+        </div>
       `;
     });
 
@@ -63,7 +112,12 @@ export async function handleClassList(req, env) {
         <h2>${cls.name}</h2>
         <p class="class-meta">${cls.ageRange} · ${cls.venue}</p>
         <p>${cls.description}</p>
-        <ul class="session-list">${joinHtml(sessionRows)}</ul>
+        ${nextAvailable ? html`
+          <p class="trial-line">New to Mini &amp; Co.?
+            <a href="${checkoutLink([nextAvailable])}">Try a single class first — next spot ${formatSydney(nextAvailable.startsAt)}</a>
+          </p>
+        ` : ''}
+        ${joinHtml(termBlocks)}
       </section>
     `;
   });
@@ -71,10 +125,10 @@ export async function handleClassList(req, env) {
   const body = html`
     <h1>Book a class</h1>
     ${classes.length ? html`
-      <p class="lede">Pick one or more sessions, then continue to checkout. All times are Sydney local time.</p>
+      <p class="lede">Book a whole term in one go, or pick the individual dates that suit you. All times are Sydney local time.</p>
       <form method="get" action="/book/checkout" data-pixel-page="class-list">
         ${joinHtml(classCards)}
-        <button type="submit">Continue to checkout</button>
+        <button type="submit">Continue with selected dates</button>
       </form>
     ` : html`
       <p class="lede">There are no upcoming sessions open for booking right now — check back soon, or follow us on Instagram for the next term's dates.</p>
@@ -83,21 +137,23 @@ export async function handleClassList(req, env) {
   return pageResponse('Book a class', body, { user });
 }
 
-// Friendly capacity-conflict page identifying the unavailable session(s).
+// Friendly conflict page identifying the unavailable session(s).
 function unavailablePage(user, sessions) {
   const reasons = {
     full: 'has just filled up',
     past: 'has already started',
     not_found: 'is no longer available',
     unavailable: 'is no longer available',
+    already_booked: 'is already booked for this child',
   };
+  const allDuplicates = sessions.every((s) => s.reason === 'already_booked');
   const items = sessions.map((s) => html`
     <li>${s.class_name ? html`${s.class_name} — ` : ''}${s.starts_at ? sessionLine(s) : 'A selected session'} ${reasons[s.reason] || 'is unavailable'}.</li>
   `);
   const body = html`
-    <h1>Oh no — that session just filled up</h1>
+    <h1>${allDuplicates ? 'Already booked!' : 'Oh no — that session just filled up'}</h1>
     <ul class="notice-list">${joinHtml(items)}</ul>
-    <p class="lede">No payment has been taken and no seats are held. Pop back to the class list to pick another time.</p>
+    <p class="lede">No payment has been taken and no new seats are held. ${allDuplicates ? html`You can see the existing booking in <a href="/account">your account</a>.` : 'Pop back to the class list to pick another time.'}</p>
     <p><a href="/book" class="button-link">Back to classes</a></p>
   `;
   return pageResponse('Session unavailable', body, { user, status: 409 });
@@ -153,8 +209,21 @@ export async function handleCheckout(req, env) {
     return pageResponse('Choose a child', body, { user });
   }
 
-  const total = sessions.reduce((sum, s) => sum + s.price_cents, 0);
-  const sessionItems = sessions.map((s) => html`
+  // Leave out anything this child is already booked into, with a notice; if
+  // nothing remains, say so instead of selling a duplicate seat.
+  const alreadyBooked = await sessionsAlreadyBookedForChild(env, child.id, sessions.map((s) => s.id));
+  const bookableSessions = sessions.filter((s) => !alreadyBooked.has(s.id));
+  if (!bookableSessions.length) {
+    return unavailablePage(user, sessions.map((s) => ({ ...s, reason: 'already_booked' })));
+  }
+  const duplicateNotice = alreadyBooked.size ? html`
+    <p class="form-notice" role="status">${child.name} is already booked into
+      ${joinHtml(sessions.filter((s) => alreadyBooked.has(s.id)).map((s) => sessionLine(s)), '; ')}
+      — those dates have been left out below.</p>
+  ` : '';
+
+  const total = bookableSessions.reduce((sum, s) => sum + s.price_cents, 0);
+  const sessionItems = bookableSessions.map((s) => html`
     <li class="checkout-session">
       <span>${s.class_name} — ${sessionLine(s)}</span>
       <span>${formatAud(s.price_cents)}</span>
@@ -165,6 +234,7 @@ export async function handleCheckout(req, env) {
   const consent = child.photo_consent ? 'yes' : 'no';
   const body = html`
     <h1>Checkout</h1>
+    ${duplicateNotice}
     <form method="post" action="/book/checkout" class="booking-form" data-pixel-page="checkout">
       ${csrfField(user.csrfToken)}
       <input type="hidden" name="child" value="${child.id}">
@@ -244,7 +314,7 @@ export async function handleCheckoutPost(req, env) {
     medicalNotes: medical,
   });
 
-  if (result.error === 'unavailable' || result.error === 'capacity') {
+  if (result.error === 'unavailable' || result.error === 'capacity' || result.error === 'already_booked') {
     return unavailablePage(user, result.sessions);
   }
   if (result.error) throw badRequest('That booking could not be created. Please try again.');

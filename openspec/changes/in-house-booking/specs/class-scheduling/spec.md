@@ -133,3 +133,19 @@ The public class list SHALL display only classes that are active and have at lea
 - **WHEN** all of an active class's sessions have start times in the past
 - **THEN** the class does not appear on the public class list
 - **AND** it reappears automatically once an administrator adds a future session
+
+### Requirement: Term Grouping On The Public Class List
+Sessions MAY carry a term label (for example "Term 3"). The public class list SHALL group each class's upcoming sessions by term label and weekly time slot, showing each term's date range, and SHALL offer three booking paths: booking every available session of a weekly slot for the term in a single action showing the combined price, selecting individual sessions, and a single-session trial linking to the class's next available session. The admin schedule and class management views SHALL show sessions organised by these terms.
+
+#### Scenario: Parent books a whole term
+- **WHEN** a term group has multiple upcoming sessions with seats available in one weekly slot
+- **THEN** the class list offers a single action that takes the parent to checkout with every available session of that slot selected
+- **AND** the combined price shown equals the sum of the included sessions' prices
+
+#### Scenario: Parent books a trial class
+- **WHEN** a class has at least one upcoming session with seats available
+- **THEN** the class list offers a trial action that takes the parent to checkout with only the next available session selected
+
+#### Scenario: Admin sees terms under each class
+- **WHEN** an administrator opens the class management view
+- **THEN** each class lists its terms with date range and session count, linking to that term's sessions

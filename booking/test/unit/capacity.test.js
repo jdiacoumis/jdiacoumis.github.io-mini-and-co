@@ -5,7 +5,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTestDb } from './helpers.js';
-import { createPendingBooking, expireBooking, loadSessionsForBooking } from '../../src/lib/domain.js';
+import { createPendingBooking, expireBooking, loadSessionsForBooking, sessionsAlreadyBookedForChild } from '../../src/lib/domain.js';
 
 const { env, dispose } = await createTestDb();
 after(() => dispose());
@@ -78,10 +78,11 @@ test('expired hold frees the seat', async () => {
   const blocked = await book('u1', 'c1', ['s-two']);
   assert.ok(blocked.error, 's-two starts full');
 
-  // Lapse one of the two holds.
+  // Lapse c1's own hold specifically, so the rebooking below is neither
+  // blocked by capacity nor by the duplicate-child guard.
   const holder = await env.DB.prepare(
     `SELECT b.id FROM bookings b JOIN booking_sessions bs ON bs.booking_id = b.id
-     WHERE bs.session_id = 's-two' AND b.status = 'pending' LIMIT 1`,
+     WHERE bs.session_id = 's-two' AND b.status = 'pending' AND b.child_id = 'c1' LIMIT 1`,
   ).first();
   await expireBooking(env, holder.id);
 
@@ -94,9 +95,16 @@ test('concurrent burst for the last seats never oversells', async () => {
     `INSERT INTO class_sessions (id, class_id, starts_at, duration_mins, capacity, price_cents, status, created_at)
      VALUES ('s-race', 'cls', ?1, 45, 3, 2500, 'scheduled', ?2)`,
   ).bind(FUTURE, PAST).run();
+  // Eight distinct children racing (the per-child duplicate guard would
+  // otherwise dominate the outcome).
+  for (let i = 0; i < 8; i += 1) {
+    await env.DB.prepare(
+      `INSERT INTO children (id, user_id, name, dob, created_at) VALUES (?1, 'u1', ?2, '2025-09-01', ?3)`,
+    ).bind(`c-race-${i}`, `Racer ${i}`, PAST).run();
+  }
 
   const attempts = await Promise.all(
-    Array.from({ length: 8 }, () => book('u1', 'c1', ['s-race'])),
+    Array.from({ length: 8 }, (_, i) => book('u1', `c-race-${i}`, ['s-race'])),
   );
   const succeeded = attempts.filter((a) => a.id).length;
   assert.equal(succeeded, 3, `exactly capacity bookings may succeed (got ${succeeded})`);
@@ -111,6 +119,46 @@ test('concurrent burst for the last seats never oversells', async () => {
   for (const loser of losers) {
     assert.ok(['capacity', 'unavailable'].includes(loser.error));
   }
+});
+
+test('the same child cannot be double-booked into one session', async () => {
+  await env.DB.prepare(
+    `INSERT INTO class_sessions (id, class_id, starts_at, duration_mins, capacity, price_cents, status, created_at)
+     VALUES ('s-dup', 'cls', ?1, 45, 10, 2500, 'scheduled', ?2)`,
+  ).bind(FUTURE, PAST).run();
+
+  const first = await book('u1', 'c1', ['s-dup']);
+  assert.ok(first.id, 'first booking succeeds');
+
+  const dup = await book('u1', 'c1', ['s-dup']);
+  assert.equal(dup.error, 'already_booked');
+  assert.equal(dup.sessions[0].reason, 'already_booked');
+
+  // A different child (even of the same parent) is fine.
+  await env.DB.prepare(
+    `INSERT INTO children (id, user_id, name, dob, created_at) VALUES ('c1b', 'u1', 'Sib', '2026-01-01', ?1)`,
+  ).bind(PAST).run();
+  const sibling = await book('u1', 'c1b', ['s-dup']);
+  assert.ok(sibling.id, 'sibling can book the same session');
+
+  assert.deepEqual([...await sessionsAlreadyBookedForChild(env, 'c1', ['s-dup'])], ['s-dup']);
+});
+
+test('concurrent duplicate attempts for one child resolve to a single booking', async () => {
+  await env.DB.prepare(
+    `INSERT INTO class_sessions (id, class_id, starts_at, duration_mins, capacity, price_cents, status, created_at)
+     VALUES ('s-dup-race', 'cls', ?1, 45, 10, 2500, 'scheduled', ?2)`,
+  ).bind(FUTURE, PAST).run();
+
+  const attempts = await Promise.all(
+    Array.from({ length: 4 }, () => book('u1', 'c1', ['s-dup-race'])),
+  );
+  assert.equal(attempts.filter((a) => a.id).length, 1, 'exactly one duplicate attempt may win');
+
+  const held = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM booking_sessions WHERE session_id = 's-dup-race'`,
+  ).first();
+  assert.equal(held.n, 1);
 });
 
 test('availability snapshot reflects holds', async () => {

@@ -137,6 +137,9 @@ async function main() {
   const list = await parent.request('/book');
   const sessions = [...list.text.matchAll(/name="session" value="([^"]+)"/g)].map((m) => m[1]).slice(0, 2);
   check('class list offers sessions', sessions.length === 2);
+  check('class list groups sessions by term', list.text.includes('Term 3'));
+  check('class list offers whole-term booking', list.text.includes('Book the full term'));
+  check('class list offers a single-class trial', list.text.includes('Try a single class first'));
   const checkoutQs = sessions.map((s) => `session=${encodeURIComponent(s)}`).join('&');
   const review = await parent.request(`/book/checkout?${checkoutQs}`);
   check('checkout shows waiver + total', review.text.includes('Waiver') && review.text.includes('$50.00'));
@@ -173,6 +176,19 @@ async function main() {
   check('status API reports confirmed', status.text.includes('"confirmed"'));
   const mailbox = await parent.request('/dev/mailbox');
   check('confirmation email sent', mailbox.text.includes('Booking confirmed'));
+
+  // Double-booking the same child into the same session must be refused —
+  // both at the checkout review (GET) and at booking creation (POST).
+  const dupReview = await parent.request(`/book/checkout?session=${encodeURIComponent(sessions[0])}`);
+  check('checkout refuses an already-booked session', dupReview.status === 409 && dupReview.text.includes('Already booked'));
+  const dupPost = await parent.request('/book/checkout', {
+    method: 'POST',
+    body: form({ csrf, child: field(review.text, 'child'), session: sessions[0], photo_consent: 'yes', medical: '', waiver: 'accepted' }),
+  });
+  check('booking creation refuses a duplicate child+session', dupPost.status === 409);
+
+  const accountPage = await parent.request('/account');
+  check('account page leads with the booking CTA', /page-head[\s\S]{0,200}Book a class/.test(accountPage.text));
 
   // ---- Isolation + CSRF ----
   console.log('\nIsolation and CSRF:');

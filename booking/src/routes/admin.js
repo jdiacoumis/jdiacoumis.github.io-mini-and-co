@@ -53,17 +53,26 @@ function addDays(dateStr, days) {
   return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
 }
 
-// GET /admin — dashboard: upcoming sessions in chronological order with
-// fullness (confirmed + unexpired pending) out of capacity.
+// GET /admin[?class=…&term=…] — dashboard: upcoming sessions in
+// chronological order with fullness (confirmed + unexpired pending) out of
+// capacity, optionally filtered to one class/term (linked from Classes).
 export async function handleAdminDashboard(req, env) {
   const user = await requireAdmin(req, env);
   await sweepExpiredBookings(env);
-  const sessions = await listSessionsWithFullness(env, { upcomingOnly: true });
+
+  const url = new URL(req.url);
+  const classFilter = isValidId(url.searchParams.get('class') || '') ? url.searchParams.get('class') : null;
+  const termFilter = cleanText(url.searchParams.get('term'), 50) || null;
+
+  let sessions = await listSessionsWithFullness(env, { upcomingOnly: true });
+  if (classFilter) sessions = sessions.filter((s) => s.class_id === classFilter);
+  if (termFilter) sessions = sessions.filter((s) => (s.term_label || '') === termFilter);
 
   const rows = sessions.map((s) => html`
     <tr class="${s.status === 'cancelled' ? 'row-cancelled' : ''}">
       <td><a href="/admin/sessions/${s.id}/roster">${formatSydney(s.starts_at)}</a></td>
       <td>${s.class_name}${s.class_active ? '' : ' (class inactive)'}</td>
+      <td>${s.term_label || '—'}</td>
       <td>${s.seats_held}/${s.capacity}</td>
       <td>${formatAud(s.price_cents)}</td>
       <td>${s.status === 'cancelled' ? 'Cancelled' : 'Scheduled'}</td>
@@ -76,12 +85,15 @@ export async function handleAdminDashboard(req, env) {
     ${adminNav()}
     ${notice(req)}
     <h2>Upcoming sessions</h2>
+    ${classFilter || termFilter ? html`
+      <p class="form-notice">Filtered${termFilter ? html` to ${termFilter}` : ''} — <a href="/admin">show everything</a></p>
+    ` : ''}
     ${rows.length ? html`
       <table class="booking-table">
-        <thead><tr><th>When (Sydney)</th><th>Class</th><th>Seats</th><th>Price</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>When (Sydney)</th><th>Class</th><th>Term</th><th>Seats</th><th>Price</th><th>Status</th><th></th></tr></thead>
         <tbody>${joinHtml(rows)}</tbody>
       </table>
-    ` : html`<p>No upcoming sessions. <a href="/admin/sessions/new">Create one</a>.</p>`}
+    ` : html`<p>No upcoming sessions${classFilter || termFilter ? ' match this filter' : ''}. <a href="/admin/sessions/new">Create some</a>.</p>`}
     <p><a href="/admin/sessions/new" class="button-link">Add sessions</a></p>
   `;
   return pageResponse('Admin', body, { user });
@@ -133,33 +145,52 @@ function readClassForm(form) {
   return { values, error };
 }
 
-// GET /admin/classes — list all classes (active and inactive).
+// GET /admin/classes — every class with its terms (label, date range,
+// session count) so the schedule is organised the way it's sold.
 export async function handleAdminClasses(req, env) {
   const user = await requireAdmin(req, env);
   const classes = (await env.DB.prepare(
     `SELECT id, name, venue, age_range, active FROM classes ORDER BY active DESC, name`,
   ).all()).results || [];
 
-  const rows = classes.map((c) => html`
-    <tr>
-      <td>${c.name}</td>
-      <td>${c.venue}</td>
-      <td>${c.age_range}</td>
-      <td>${c.active ? 'Active' : 'Inactive'}</td>
-      <td class="table-actions"><a href="/admin/classes/${c.id}/edit">Edit</a></td>
-    </tr>
-  `);
+  const termRows = (await env.DB.prepare(
+    `SELECT class_id, term_label, COUNT(*) AS session_count,
+            MIN(starts_at) AS first_starts, MAX(starts_at) AS last_starts
+     FROM class_sessions
+     WHERE status = 'scheduled'
+     GROUP BY class_id, term_label
+     ORDER BY first_starts`,
+  ).all()).results || [];
+
+  const cards = classes.map((c) => {
+    const terms = termRows.filter((t) => t.class_id === c.id);
+    const termItems = terms.map((t) => html`
+      <li>
+        <a href="/admin?class=${c.id}&term=${encodeURIComponent(t.term_label)}">${t.term_label || 'Unlabelled sessions'}</a>
+        · ${formatSydney(t.first_starts, 'date')} – ${formatSydney(t.last_starts, 'date')}
+        · ${t.session_count} session${t.session_count === 1 ? '' : 's'}
+      </li>
+    `);
+    return html`
+      <section class="class-card">
+        <h2>${c.name}${c.active ? '' : html` <span class="muted">(inactive)</span>`}</h2>
+        <p class="class-meta">${c.age_range} · ${c.venue}</p>
+        ${terms.length
+          ? html`<ul class="term-list">${joinHtml(termItems)}</ul>`
+          : html`<p class="muted">No scheduled sessions yet.</p>`}
+        <p class="table-actions">
+          <a href="/admin/classes/${c.id}/edit">Edit class</a>
+          <a href="/admin/sessions/new?class=${c.id}">Add sessions</a>
+        </p>
+      </section>
+    `;
+  });
 
   const body = html`
     <h1>Classes</h1>
     ${adminNav()}
     ${notice(req)}
-    ${rows.length ? html`
-      <table class="booking-table">
-        <thead><tr><th>Name</th><th>Venue</th><th>Ages</th><th>Status</th><th></th></tr></thead>
-        <tbody>${joinHtml(rows)}</tbody>
-      </table>
-    ` : html`<p>No classes yet.</p>`}
+    ${cards.length ? joinHtml(cards) : html`<p>No classes yet.</p>`}
     <p><a href="/admin/classes/new" class="button-link">Add a class</a></p>
   `;
   return pageResponse('Classes', body, { user });
@@ -288,6 +319,10 @@ function sessionForm({ action, values, classes, error = '', csrfToken, submitLab
         <label for="price">Price per child (AUD, e.g. 25 or 25.50)</label>
         <input type="text" id="price" name="price" value="${values.price}" required>
       </div>
+      <div class="form-group">
+        <label for="term_label">Term label (groups the public list, e.g. "Term 3" — optional)</label>
+        <input type="text" id="term_label" name="term_label" value="${values.term_label}" maxlength="50">
+      </div>
       ${isEdit ? html`
         <div class="form-group">
           <label for="status">Status</label>
@@ -316,6 +351,7 @@ function readSessionForm(form, { withRepeat }) {
     duration: String(form.get('duration') || '').trim(),
     capacity: String(form.get('capacity') || '').trim(),
     price: String(form.get('price') || '').trim(),
+    term_label: cleanText(form.get('term_label'), 50),
     repeat: String(form.get('repeat') || '1').trim(),
     status: form.get('status') === 'cancelled' ? 'cancelled' : 'scheduled',
   };
@@ -343,18 +379,21 @@ async function listAllClasses(env) {
   return (await env.DB.prepare(`SELECT id, name, active FROM classes ORDER BY active DESC, name`).all()).results || [];
 }
 
-// GET /admin/sessions/new
+// GET /admin/sessions/new[?class=…]
 export async function handleAdminSessionNew(req, env) {
   const user = await requireAdmin(req, env);
   const classes = await listAllClasses(env);
   if (!classes.length) return redirect('/admin/classes/new', 303);
+
+  const preselect = new URL(req.url).searchParams.get('class');
+  const classId = classes.some((c) => c.id === preselect) ? preselect : classes[0].id;
 
   const body = html`
     <h1>Add sessions</h1>
     ${adminNav()}
     ${sessionForm({
       action: '/admin/sessions/new',
-      values: { class_id: classes[0].id, date: '', time: '09:30', duration: '45', capacity: '12', price: '25', repeat: '1' },
+      values: { class_id: classId, date: '', time: '09:30', duration: '45', capacity: '12', price: '25', term_label: '', repeat: '1' },
       classes,
       csrfToken: user.csrfToken,
       submitLabel: 'Create sessions',
@@ -388,9 +427,9 @@ export async function handleAdminSessionNewPost(req, env, _params) {
   for (let week = 0; week < parsed.repeat; week += 1) {
     const startsAt = week === 0 ? parsed.startsAtUtc : sydneyToUtc(addDays(values.date, 7 * week), values.time);
     statements.push(env.DB.prepare(
-      `INSERT INTO class_sessions (id, class_id, starts_at, duration_mins, capacity, price_cents, status, created_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'scheduled', ?7)`,
-    ).bind(uuid(), cls.id, startsAt, parsed.duration, parsed.capacity, parsed.priceCents, now));
+      `INSERT INTO class_sessions (id, class_id, starts_at, duration_mins, capacity, price_cents, status, term_label, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'scheduled', ?7, ?8)`,
+    ).bind(uuid(), cls.id, startsAt, parsed.duration, parsed.capacity, parsed.priceCents, values.term_label, now));
   }
   await env.DB.batch(statements);
 
@@ -402,7 +441,7 @@ export async function handleAdminSessionNewPost(req, env, _params) {
 export async function handleAdminSessionEdit(req, env, params) {
   const user = await requireAdmin(req, env);
   const session = await env.DB.prepare(
-    `SELECT id, class_id, starts_at, duration_mins, capacity, price_cents, status FROM class_sessions WHERE id = ?1`,
+    `SELECT id, class_id, starts_at, duration_mins, capacity, price_cents, status, term_label FROM class_sessions WHERE id = ?1`,
   ).bind(params.id).first();
   if (!session) throw notFound();
 
@@ -420,6 +459,7 @@ export async function handleAdminSessionEdit(req, env, params) {
         duration: String(session.duration_mins),
         capacity: String(session.capacity),
         price: (session.price_cents / 100).toFixed(2),
+        term_label: session.term_label || '',
         status: session.status,
       },
       classes,
@@ -454,8 +494,8 @@ export async function handleAdminSessionEditPost(req, env, params) {
 
   await env.DB.prepare(
     `UPDATE class_sessions SET class_id = ?1, starts_at = ?2, duration_mins = ?3,
-            capacity = ?4, price_cents = ?5, status = ?6 WHERE id = ?7`,
-  ).bind(cls.id, parsed.startsAtUtc, parsed.duration, parsed.capacity, parsed.priceCents, values.status, session.id).run();
+            capacity = ?4, price_cents = ?5, status = ?6, term_label = ?7 WHERE id = ?8`,
+  ).bind(cls.id, parsed.startsAtUtc, parsed.duration, parsed.capacity, parsed.priceCents, values.status, values.term_label, session.id).run();
 
   logEvent('session_updated', { session_id: session.id.slice(0, 8), status: values.status });
   return redirect('/admin?ok=session-updated', 303);

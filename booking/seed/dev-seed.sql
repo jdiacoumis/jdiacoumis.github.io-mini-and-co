@@ -13,14 +13,14 @@ INSERT OR REPLACE INTO classes (id, name, description, venue, age_range, active,
   strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
 );
 
-INSERT OR REPLACE INTO class_sessions (id, class_id, starts_at, duration_mins, capacity, price_cents, status, created_at) VALUES
-  ('ses-w1-am', 'cls-sensory-play', strftime('%Y-%m-%dT01:00:00Z', 'now', '+3 days'),  45, 12, 2500, 'scheduled', strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-  ('ses-w1-pm', 'cls-sensory-play', strftime('%Y-%m-%dT03:00:00Z', 'now', '+3 days'),  45, 12, 2500, 'scheduled', strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-  ('ses-w2-am', 'cls-sensory-play', strftime('%Y-%m-%dT01:00:00Z', 'now', '+10 days'), 45, 12, 2500, 'scheduled', strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-  ('ses-w2-pm', 'cls-sensory-play', strftime('%Y-%m-%dT03:00:00Z', 'now', '+10 days'), 45, 12, 2500, 'scheduled', strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-  ('ses-w3-am', 'cls-sensory-play', strftime('%Y-%m-%dT01:00:00Z', 'now', '+17 days'), 45, 12, 2500, 'scheduled', strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-  ('ses-w3-pm', 'cls-sensory-play', strftime('%Y-%m-%dT03:00:00Z', 'now', '+17 days'), 45, 12, 2500, 'scheduled', strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-  ('ses-w4-am', 'cls-sensory-play', strftime('%Y-%m-%dT01:00:00Z', 'now', '+24 days'), 45, 12, 2500, 'scheduled', strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-  ('ses-w4-pm', 'cls-sensory-play', strftime('%Y-%m-%dT03:00:00Z', 'now', '+24 days'), 45, 12, 2500, 'scheduled', strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+INSERT OR REPLACE INTO class_sessions (id, class_id, starts_at, duration_mins, capacity, price_cents, status, term_label, created_at) VALUES
+  ('ses-w1-am', 'cls-sensory-play', strftime('%Y-%m-%dT01:00:00Z', 'now', '+3 days'),  45, 12, 2500, 'scheduled', 'Term 3', strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  ('ses-w1-pm', 'cls-sensory-play', strftime('%Y-%m-%dT03:00:00Z', 'now', '+3 days'),  45, 12, 2500, 'scheduled', 'Term 3', strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  ('ses-w2-am', 'cls-sensory-play', strftime('%Y-%m-%dT01:00:00Z', 'now', '+10 days'), 45, 12, 2500, 'scheduled', 'Term 3', strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  ('ses-w2-pm', 'cls-sensory-play', strftime('%Y-%m-%dT03:00:00Z', 'now', '+10 days'), 45, 12, 2500, 'scheduled', 'Term 3', strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  ('ses-w3-am', 'cls-sensory-play', strftime('%Y-%m-%dT01:00:00Z', 'now', '+17 days'), 45, 12, 2500, 'scheduled', 'Term 3', strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  ('ses-w3-pm', 'cls-sensory-play', strftime('%Y-%m-%dT03:00:00Z', 'now', '+17 days'), 45, 12, 2500, 'scheduled', 'Term 3', strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  ('ses-w4-am', 'cls-sensory-play', strftime('%Y-%m-%dT01:00:00Z', 'now', '+24 days'), 45, 12, 2500, 'scheduled', 'Term 3', strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  ('ses-w4-pm', 'cls-sensory-play', strftime('%Y-%m-%dT03:00:00Z', 'now', '+24 days'), 45, 12, 2500, 'scheduled', 'Term 3', strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
   -- One tiny session for testing the "class full" path locally.
-  ('ses-full',  'cls-sensory-play', strftime('%Y-%m-%dT01:00:00Z', 'now', '+5 days'),  45, 1,  2500, 'scheduled', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
+  ('ses-full',  'cls-sensory-play', strftime('%Y-%m-%dT01:00:00Z', 'now', '+5 days'),  45, 1,  2500, 'scheduled', 'Term 3', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));

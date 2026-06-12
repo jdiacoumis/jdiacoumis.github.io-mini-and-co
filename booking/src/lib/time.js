@@ -61,6 +61,13 @@ export function sydneyFields(utcIso) {
   return { date: `${p.year}-${p.month}-${p.day}`, time: `${p.hour}:${p.minute}` };
 }
 
+// Sydney-local weekday name of a stored UTC instant ("Wednesday").
+export function sydneyWeekday(utcIso) {
+  const date = new Date(utcIso);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('en-AU', { timeZone: TZ, weekday: 'long' }).format(date);
+}
+
 export function ageInMonths(dobStr, atIso = null) {
   const dob = new Date(`${dobStr}T00:00:00Z`);
   const at = atIso ? new Date(atIso) : new Date();

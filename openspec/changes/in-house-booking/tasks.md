@@ -36,3 +36,10 @@
 ## 5. Documentation
 
 - [x] 5.1 booking/README.md (architecture, local dev), DEPLOYMENT.md (Cloudflare, Stripe, Resend, DNS cutover, rollback), MIGRATION.md (ClassForKids export → import → invites)
+
+## 6. Feedback round one
+
+- [x] 6.1 Term grouping: term_label on sessions (migration 0002), public class list grouped by term + weekly slot with whole-term booking and single-class trial links, admin term field
+- [x] 6.2 Account page: booking CTA at the top, bookings listed first, compact sections
+- [x] 6.3 Double-booking guard: a child cannot hold two seats in one session (checkout exclusion notice + race-proof insert guard)
+- [x] 6.4 Admin Classes tab lists each class's terms (date range, session count) linking to the filtered schedule

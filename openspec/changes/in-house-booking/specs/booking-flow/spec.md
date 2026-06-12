@@ -121,3 +121,23 @@ A signed-in parent SHALL be able to view a list of their own bookings showing ea
 - **WHEN** a request without a valid signed-in session attempts to view the dashboard or create a booking
 - **THEN** the request is refused and directed to sign in
 - **AND** no booking data is returned
+
+### Requirement: No Duplicate Booking For The Same Child And Session
+A child MUST NOT hold more than one seat in the same session. When a parent's checkout selection includes sessions the chosen child is already booked into (confirmed, or pending within its hold), those sessions SHALL be excluded from the checkout with a notice; a direct booking submission containing such a session MUST be rejected without creating a booking, and this MUST hold under concurrent submissions. A different child — including a sibling on the same account — MAY book the same session.
+
+#### Scenario: Checkout excludes already-booked sessions
+- **WHEN** a parent reaches checkout having selected a session their chosen child is already booked into alongside a new session
+- **THEN** the already-booked session is left out with a notice and the total covers only the new session
+
+#### Scenario: Direct duplicate submission is rejected
+- **WHEN** a booking submission references a session in which the chosen child already holds a seat
+- **THEN** the booking is rejected with a message identifying the duplicate
+- **AND** no booking record or seat reservation is created
+
+#### Scenario: Concurrent duplicate submissions yield one booking
+- **WHEN** two submissions booking the same child into the same session arrive at effectively the same time
+- **THEN** exactly one booking is created
+
+#### Scenario: A sibling may book the same session
+- **WHEN** a parent books a second child of theirs into a session their first child is already booked into
+- **THEN** the booking succeeds, subject to capacity

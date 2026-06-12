@@ -46,22 +46,11 @@ export async function handleAccountDashboard(req, env) {
   });
 
   const body = html`
-    <h1>My account</h1>
-    <p class="lede">Signed in as ${user.email}</p>
-
-    <section class="account-section">
-      <h2>My details</h2>
-      <p>${user.name ? html`${user.name}` : html`<em>No name on file yet</em>`}${user.phone ? html` · ${user.phone}` : ''}</p>
-      <p><a href="/account/profile">Update my details</a></p>
-    </section>
-
-    <section class="account-section">
-      <h2>My children</h2>
-      ${children.length
-        ? html`<ul class="account-children">${joinHtml(childItems)}</ul>`
-        : html`<p>No children added yet.</p>`}
-      <p><a href="/account/children" class="button-link button-secondary">Manage children</a></p>
-    </section>
+    <div class="page-head">
+      <h1>My account</h1>
+      <a href="/book" class="button-link">Book a class</a>
+    </div>
+    <p class="account-signed-in">Signed in as ${user.email}</p>
 
     <section class="account-section">
       <h2>My bookings</h2>
@@ -70,8 +59,21 @@ export async function handleAccountDashboard(req, env) {
           <thead><tr><th>Session(s)</th><th>Child</th><th>Amount</th><th>Status</th></tr></thead>
           <tbody>${joinHtml(bookingRows)}</tbody>
         </table>
-      ` : html`<p>No bookings yet.</p>`}
-      <p><a href="/book" class="button-link">Book a class</a></p>
+      ` : html`<p>No bookings yet — <a href="/book">grab a spot in the next class</a>.</p>`}
+    </section>
+
+    <section class="account-section">
+      <h2>My children</h2>
+      ${children.length
+        ? html`<ul class="account-children">${joinHtml(childItems)}</ul>`
+        : html`<p>No children added yet — <a href="/account/children/new">add your little one</a> to start booking.</p>`}
+      <p><a href="/account/children">Manage children</a></p>
+    </section>
+
+    <section class="account-section">
+      <h2>My details</h2>
+      <p>${user.name ? html`${user.name}` : html`<em>No name on file yet</em>`}${user.phone ? html` · ${user.phone}` : ''}
+        · <a href="/account/profile">Update</a></p>
     </section>
   `;
   return pageResponse('My account', body, { user });
