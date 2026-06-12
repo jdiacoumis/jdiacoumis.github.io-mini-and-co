@@ -63,3 +63,16 @@ test('mock payments driver refuses to load in production (fail-closed)', () => {
     /cannot load in production/,
   );
 });
+
+test('unconfigured webhook secret rejects everything — even a signature keyed on "undefined"', async () => {
+  const driver = getPaymentsDriver({ PAYMENTS_DRIVER: 'stripe', PUBLIC_BASE_URL: 'https://example.com' });
+  const body = '{}';
+  const timestamp = Math.floor(Date.now() / 1000);
+  // The pre-fix failure mode: String(undefined) becomes the HMAC key, which
+  // an attacker can compute. That signature must not verify.
+  const forged = await hmacSha256Hex('undefined', `${timestamp}.${body}`);
+  await assert.rejects(
+    () => driver.verifyWebhook(`t=${timestamp},v1=${forged}`, body),
+    /not configured/,
+  );
+});
