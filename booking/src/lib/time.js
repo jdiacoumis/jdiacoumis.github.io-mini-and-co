@@ -22,8 +22,13 @@ export function sydneyToUtc(dateStr, timeStr) {
   const m1 = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr));
   const m2 = /^(\d{2}):(\d{2})$/.exec(String(timeStr));
   if (!m1 || !m2) return null;
+  if (+m2[1] > 23 || +m2[2] > 59) return null;
   const target = Date.UTC(+m1[1], +m1[2] - 1, +m1[3], +m2[1], +m2[2], 0);
   if (Number.isNaN(target)) return null;
+  // Reject impossible calendar dates (31 February, month 13, …) instead of
+  // letting Date.UTC roll them over into a different real date.
+  const check = new Date(target);
+  if (check.getUTCFullYear() !== +m1[1] || check.getUTCMonth() !== +m1[2] - 1 || check.getUTCDate() !== +m1[3]) return null;
   let guess = target;
   for (let i = 0; i < 3; i++) {
     const next = target - tzOffsetMinutes(new Date(guess)) * 60000;
