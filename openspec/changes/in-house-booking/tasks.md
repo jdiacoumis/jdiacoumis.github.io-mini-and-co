@@ -35,4 +35,4 @@
 
 ## 5. Documentation
 
-- [ ] 5.1 booking/README.md (architecture, local dev), DEPLOYMENT.md (Cloudflare, Stripe, Resend, DNS cutover, rollback), MIGRATION.md (ClassForKids export → import → invites)
+- [x] 5.1 booking/README.md (architecture, local dev), DEPLOYMENT.md (Cloudflare, Stripe, Resend, DNS cutover, rollback), MIGRATION.md (ClassForKids export → import → invites)
