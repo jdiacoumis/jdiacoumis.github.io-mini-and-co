@@ -57,6 +57,12 @@ function stripeDriver(env) {
     // with the endpoint secret, constant-time compare, 5-minute timestamp
     // tolerance (replay window). Returns the parsed event or throws.
     async verifyWebhook(signatureHeader, body) {
+      // Security: never fall back to HMAC-ing with the string "undefined" —
+      // a missing secret must reject every webhook, not accept ones signed
+      // with a guessable constant key.
+      if (!env.STRIPE_WEBHOOK_SECRET) {
+        throw new Error('STRIPE_WEBHOOK_SECRET is not configured');
+      }
       const parts = String(signatureHeader || '').split(',');
       let timestamp = null;
       const candidates = [];

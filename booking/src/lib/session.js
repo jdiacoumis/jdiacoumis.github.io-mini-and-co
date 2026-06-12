@@ -9,7 +9,6 @@ import { maskEmail, logEvent } from './log.js';
 
 const SESSION_ID_COOKIE = 'session';
 const SESSION_DURATION_SECS = 30 * 24 * 3600; // 30 days absolute expiry
-const SESSION_GRACE_SECS = 60; // grace period for clock skew
 
 export async function createSession(env, userId) {
   const sessionId = randomToken();
@@ -34,9 +33,13 @@ export async function getSession(env, sessionId) {
   const sessionHash = await sha256Hex(sessionId);
   const now = nowIso();
 
+  // Compare like-for-like ISO strings (both 'YYYY-MM-DDTHH:MM:SSZ'). Mixing
+  // in SQLite's datetime() output ('YYYY-MM-DD HH:MM:SS') would make every
+  // same-day comparison resolve on 'T' > ' ' and honour expiry only at day
+  // granularity.
   const row = await env.DB.prepare(
     `SELECT user_id, csrf_token, created_at, expires_at FROM web_sessions
-     WHERE session_hash = ?1 AND expires_at > datetime(?2, '-${SESSION_GRACE_SECS} seconds')`,
+     WHERE session_hash = ?1 AND expires_at > ?2`,
   ).bind(sessionHash, now).first();
 
   if (!row) return null;
