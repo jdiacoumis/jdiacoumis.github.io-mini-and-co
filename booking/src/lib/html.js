@@ -61,16 +61,22 @@ export function csrfField(csrfToken) {
 // the sign-out control is a POST form because sign-out is state-changing
 // and must carry the CSRF token.
 export function layout(title, bodyHtml, { user = null, extraHead = '' } = {}) {
+  // Same header markup and classes as the static marketing pages (styles.css
+  // already ships the styling and js/main.js the mobile toggle) — with
+  // root-absolute hrefs because booking pages live under nested paths, plus
+  // the account-aware items. Sign-out is a POST form (state-changing, CSRF).
   const accountNav = user
     ? html`
-        <a href="/account">My account</a>
-        ${user.role === 'admin' ? html`<a href="/admin">Admin</a>` : ''}
-        <form method="post" action="/auth/logout" class="nav-signout-form">
-          ${csrfField(user.csrfToken)}
-          <button type="submit" class="nav-signout">Sign out</button>
-        </form>
+        <li><a class="site-nav__link" href="/account">My account</a></li>
+        ${user.role === 'admin' ? html`<li><a class="site-nav__link" href="/admin">Admin</a></li>` : ''}
+        <li>
+          <form method="post" action="/auth/logout" class="nav-signout-form">
+            ${csrfField(user.csrfToken)}
+            <button type="submit" class="site-nav__link nav-signout">Sign out</button>
+          </form>
+        </li>
       `
-    : html`<a href="/auth/request-magic-link">Sign in</a>`;
+    : html`<li><a class="site-nav__link" href="/auth/request-magic-link">Sign in</a></li>`;
 
   return html`<!DOCTYPE html>
 <html lang="en-AU">
@@ -79,6 +85,7 @@ export function layout(title, bodyHtml, { user = null, extraHead = '' } = {}) {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex">
   <title>${title} — Mini &amp; Co. Sensory Classes</title>
+  <meta name="theme-color" content="#faf6f1">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500&family=Outfit:wght@300;400;500;600&display=swap">
@@ -87,21 +94,55 @@ export function layout(title, bodyHtml, { user = null, extraHead = '' } = {}) {
   ${raw(extraHead)}
 </head>
 <body class="booking-body">
-  <header class="booking-header">
-    <div class="booking-header-content">
-      <a href="/" class="booking-site-title">Mini &amp; Co.</a>
-      <nav class="booking-nav">
-        <a href="/book">Book</a>
-        ${accountNav}
+  <header class="site-header">
+    <div class="container site-header__inner">
+      <a class="site-logo" href="/" aria-label="Mini &amp; Co. — home">
+        <img src="/assets/logo/logo.svg" alt="Mini &amp; Co. Sensory Classes">
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" aria-label="Toggle menu" data-nav-toggle>
+        <span class="nav-toggle__bar" aria-hidden="true"></span>
+      </button>
+      <nav class="site-nav" id="primary-nav" data-site-nav aria-label="Primary">
+        <ul class="site-nav__list">
+          <li><a class="site-nav__link" href="/">Home</a></li>
+          <li><a class="site-nav__link" href="/classes.html">Classes</a></li>
+          <li><a class="site-nav__link" href="/book">Book</a></li>
+          ${accountNav}
+        </ul>
       </nav>
     </div>
   </header>
   <main class="booking-main">
     ${bodyHtml}
   </main>
-  <footer class="booking-footer">
-    <p>&copy; 2026 Mini &amp; Co. Sensory Classes · Oran Park, NSW</p>
+  <footer class="site-footer">
+    <div class="container site-footer__inner">
+      <div>
+        <h2>Mini &amp; Co.</h2>
+        <p>Evidence-based sensory classes for little ones 3–12 months and their mums, in Oran Park, NSW.</p>
+      </div>
+      <div>
+        <h3>Visit</h3>
+        <ul class="site-footer__list">
+          <li>Sandown Room</li>
+          <li>Oran Park Library</li>
+          <li>72 Central Ave</li>
+          <li>Oran Park NSW 2570</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Stay in touch</h3>
+        <ul class="site-footer__list">
+          <li><a href="mailto:miniandco.classes@gmail.com">miniandco.classes@gmail.com</a></li>
+          <li><a href="https://instagram.com/miniandco.classes" rel="noopener noreferrer" target="_blank">@miniandco.classes</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="container site-footer__bottom">
+      © 2026 Mini &amp; Co. Sensory Classes
+    </div>
   </footer>
+  <script src="/js/main.js" defer></script>
   <script src="/js/booking-pixel.js" defer></script>
 </body>
 </html>`;

@@ -24,8 +24,8 @@
 
 ## 3. Integration
 
-- [ ] 3.1 Marketing pages: Book now CTAs → /book/ (same tab), structured-data offer URLs updated, copy no longer references Class4Kids
-- [ ] 3.2 Booking pages share brand look: reuse css/styles.css tokens + booking.css; header/footer parity
+- [x] 3.1 Marketing pages: Book now CTAs → /book/ (same tab), structured-data offer URLs updated, copy no longer references Class4Kids
+- [x] 3.2 Booking pages share brand look: reuse css/styles.css tokens + booking.css; header/footer parity
 
 ## 4. Verification
 
