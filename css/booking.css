@@ -1,0 +1,428 @@
+/* Booking pages stylesheet — server-rendered pages under /book, /account,
+   /auth and /admin. Extends css/styles.css and reuses its brand tokens. */
+
+.booking-body {
+  display: flex;
+  min-height: 100vh;
+  flex-direction: column;
+}
+
+/* --- Header / footer (echoes the marketing site) --- */
+
+.booking-header {
+  border-bottom: 1px solid var(--colour-line-soft);
+  background-color: var(--colour-bg);
+}
+
+.booking-header-content {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: var(--space-sm) var(--space-md);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+.booking-site-title {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 500;
+  color: var(--colour-text);
+  text-decoration: none;
+}
+
+.booking-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+}
+
+.booking-nav a {
+  color: var(--colour-text-soft);
+  text-decoration: none;
+  font-size: 0.95rem;
+}
+
+.booking-nav a:hover {
+  color: var(--colour-text);
+}
+
+.nav-signout-form {
+  display: inline;
+  margin: 0;
+}
+
+.nav-signout {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--colour-text-soft);
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.nav-signout:hover {
+  color: var(--colour-text);
+  background: none;
+}
+
+.booking-main {
+  flex: 1;
+  width: 100%;
+  max-width: var(--max-width-narrow);
+  margin: 0 auto;
+  padding: var(--space-lg) var(--space-md) var(--space-2xl);
+}
+
+.booking-footer {
+  border-top: 1px solid var(--colour-line-soft);
+  text-align: center;
+  padding: var(--space-md);
+  color: var(--colour-text-muted);
+  font-size: 0.875rem;
+}
+
+/* --- Typography --- */
+
+.booking-main h1 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(2rem, 1.6rem + 1.5vw, 2.75rem);
+  line-height: 1.15;
+  margin: 0 0 var(--space-sm);
+}
+
+.booking-main h2 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 1.4rem;
+  margin: var(--space-lg) 0 var(--space-xs);
+}
+
+.booking-main .lede {
+  color: var(--colour-text-soft);
+  max-width: var(--max-width-prose);
+}
+
+/* --- Forms --- */
+
+.booking-form {
+  max-width: var(--max-width-narrow);
+  margin: var(--space-md) 0;
+}
+
+.form-group {
+  margin-bottom: var(--space-md);
+}
+
+.form-group label,
+.form-group legend {
+  display: block;
+  margin-bottom: var(--space-2xs);
+  font-weight: 400;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="tel"],
+input[type="date"],
+input[type="time"],
+input[type="number"],
+textarea,
+select {
+  width: 100%;
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--colour-line);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-body);
+  font-size: 1rem;
+  background-color: #fff;
+  color: var(--colour-text);
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--colour-accent-sage);
+  box-shadow: 0 0 0 3px rgba(174, 189, 161, 0.18);
+}
+
+.consent-group {
+  border: 1px solid var(--colour-line);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+}
+
+.consent-group legend {
+  padding: 0 var(--space-2xs);
+  font-weight: 400;
+}
+
+.consent-group label {
+  display: block;
+  margin: var(--space-2xs) 0;
+  font-weight: 300;
+}
+
+.consent-group input,
+.form-group input[type="checkbox"],
+.form-group input[type="radio"] {
+  width: auto;
+  margin-right: var(--space-2xs);
+}
+
+button,
+.button-link {
+  display: inline-block;
+  padding: var(--space-xs) var(--space-md);
+  background-color: var(--colour-text);
+  color: var(--colour-bg);
+  border: none;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 1rem;
+  font-weight: 400;
+  text-decoration: none;
+  transition: background-color var(--transition), transform var(--transition);
+}
+
+button:hover,
+.button-link:hover {
+  background-color: var(--colour-text-soft);
+}
+
+button:active {
+  transform: scale(0.98);
+}
+
+.button-secondary {
+  background-color: transparent;
+  color: var(--colour-text);
+  border: 1px solid var(--colour-line);
+}
+
+.button-secondary:hover {
+  background-color: var(--colour-bg-warm);
+}
+
+.button-danger {
+  background-color: #a04545;
+}
+
+.button-danger:hover {
+  background-color: #b65d5d;
+}
+
+.form-error {
+  background-color: var(--colour-bg-blush);
+  border: 1px solid var(--colour-accent-blush);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+  color: var(--colour-text);
+}
+
+/* --- Class list --- */
+
+.class-card {
+  background-color: #fff;
+  border: 1px solid var(--colour-line-soft);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+  padding: var(--space-md) var(--space-lg);
+  margin: var(--space-md) 0;
+}
+
+.class-card h2 {
+  margin-top: 0;
+}
+
+.class-meta {
+  color: var(--colour-text-muted);
+  font-size: 0.9rem;
+  margin-top: calc(-1 * var(--space-2xs));
+}
+
+.session-list {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-sm) 0 0;
+}
+
+.session-option {
+  border-top: 1px solid var(--colour-line-soft);
+  padding: var(--space-xs) 0;
+}
+
+.session-option label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  cursor: pointer;
+}
+
+.session-option-full {
+  color: var(--colour-text-muted);
+}
+
+.session-when {
+  font-weight: 400;
+  min-width: 16rem;
+}
+
+.session-meta {
+  color: var(--colour-text-soft);
+}
+
+.session-spots {
+  margin-left: auto;
+  color: var(--colour-accent-sage);
+  font-size: 0.9rem;
+}
+
+.session-full {
+  margin-left: auto;
+  color: var(--colour-text-muted);
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* --- Checkout --- */
+
+.checkout-sessions {
+  list-style: none;
+  padding: 0;
+}
+
+.checkout-session {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  border-bottom: 1px solid var(--colour-line-soft);
+  padding: var(--space-2xs) 0;
+}
+
+.checkout-total {
+  text-align: right;
+  font-size: 1.1rem;
+}
+
+.waiver-text {
+  background-color: var(--colour-bg-warm);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  font-size: 0.95rem;
+  color: var(--colour-text-soft);
+}
+
+.waiver-version {
+  font-size: 0.8rem;
+  color: var(--colour-text-muted);
+}
+
+.child-chooser {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  max-width: 24rem;
+}
+
+/* --- Confirmation --- */
+
+.confirm-panel {
+  background-color: #fff;
+  border: 1px solid var(--colour-line-soft);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+  padding: var(--space-lg);
+}
+
+.confirm-paid {
+  border-color: var(--colour-accent-sage);
+}
+
+.confirm-sessions {
+  padding-left: 1.2rem;
+}
+
+.session-venue {
+  color: var(--colour-text-muted);
+}
+
+/* --- Tables (account, admin) --- */
+
+.booking-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--space-sm) 0;
+  background-color: #fff;
+  border: 1px solid var(--colour-line-soft);
+  border-radius: var(--radius-sm);
+}
+
+.booking-table th,
+.booking-table td {
+  text-align: left;
+  padding: var(--space-xs) var(--space-sm);
+  border-bottom: 1px solid var(--colour-line-soft);
+  font-size: 0.95rem;
+}
+
+.booking-table th {
+  font-weight: 500;
+  color: var(--colour-text-soft);
+}
+
+.table-actions a {
+  margin-right: var(--space-xs);
+}
+
+.status {
+  display: inline-block;
+  padding: 0.1rem 0.6rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.85rem;
+}
+
+.status-confirmed { background-color: var(--colour-bg-sage); }
+.status-pending { background-color: var(--colour-bg-warm); }
+.status-cancelled,
+.status-expired { background-color: var(--colour-line-soft); color: var(--colour-text-muted); }
+
+/* --- Misc --- */
+
+.account-section {
+  margin: var(--space-lg) 0;
+}
+
+.notice-list {
+  background-color: var(--colour-bg-blush);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md) var(--space-sm) var(--space-lg);
+}
+
+.error-container {
+  text-align: center;
+  padding: var(--space-2xl) var(--space-md);
+}
+
+.error-container h1 {
+  font-size: 4rem;
+  font-weight: 300;
+  margin: 0 0 var(--space-sm);
+  color: var(--colour-accent-blush);
+}
+
+.error-container h2 {
+  font-size: 1.5rem;
+  font-weight: 400;
+  margin: 0 0 var(--space-md);
+}

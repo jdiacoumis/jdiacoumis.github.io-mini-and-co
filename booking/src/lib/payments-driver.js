@@ -1,36 +1,47 @@
 // Payments driver: Stripe Checkout (production) or mock (local dev).
+// Card data never touches this system — Stripe Checkout is fully hosted.
 // The mock driver refuses to load in production (fail-closed).
 
-import { logEvent, logError } from './log.js';
+import { hmacSha256Hex, timingSafeEqual } from './crypto.js';
+import { logEvent } from './log.js';
 import { uuid } from './db.js';
 
-async function stripeDriver(env) {
+const WEBHOOK_TOLERANCE_SECS = 300; // 5 minutes
+
+function stripeDriver(env) {
   return {
-    async createCheckout(bookingId, amountCents, childName, sessionId) {
+    name: 'stripe',
+
+    // Create a hosted Checkout Session for a pending booking. The booking id
+    // travels as client_reference_id so the webhook can reconcile payment →
+    // booking without trusting anything client-side.
+    async createCheckout({ bookingId, amountCents, description }) {
       const params = new URLSearchParams({
+        mode: 'payment',
+        success_url: `${env.PUBLIC_BASE_URL}/book/confirm?booking=${bookingId}`,
+        cancel_url: `${env.PUBLIC_BASE_URL}/book/cancelled?booking=${bookingId}`,
         'payment_method_types[]': 'card',
-        'mode': 'payment',
-        'success_url': `${env.PUBLIC_BASE_URL}/booking/confirm?session_id={CHECKOUT_SESSION_ID}`,
-        'cancel_url': `${env.PUBLIC_BASE_URL}/book/checkout?cancelled=1`,
         'line_items[0][price_data][currency]': 'aud',
         'line_items[0][price_data][unit_amount]': String(amountCents),
-        'line_items[0][price_data][product_data][name]': `Mini & Co. — ${childName}`,
+        'line_items[0][price_data][product_data][name]': description,
         'line_items[0][quantity]': '1',
-        'client_reference_id': bookingId,
-        'expires_at': String(Math.floor(Date.now() / 1000) + 30 * 60), // 30 min
+        client_reference_id: bookingId,
+        expires_at: String(Math.floor(Date.now() / 1000) + 30 * 60),
       });
 
       const response = await fetch('https://api.stripe.com/v1/checkout/sessions', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${env.STRIPE_SECRET_KEY}`,
+          Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
           'Content-Type': 'application/x-www-form-urlencoded',
         },
         body: params,
       });
 
       if (!response.ok) {
-        throw new Error(`Stripe error: ${response.statusText}`);
+        // Security: Stripe's error body can include request details — log the
+        // status only, never echo it to the user.
+        throw new Error(`Stripe checkout creation failed (HTTP ${response.status})`);
       }
 
       const session = await response.json();
@@ -38,72 +49,76 @@ async function stripeDriver(env) {
         booking_id: bookingId.slice(0, 8),
         amount_cents: amountCents,
         provider: 'stripe',
-        session_id: session.id.slice(0, 8),
       });
-
-      return { url: session.url, sessionId: session.id };
+      return { url: session.url, checkoutRef: session.id };
     },
 
-    async verifyWebhook(signature, body) {
-      const { hmacSha256Hex, timingSafeEqual } = await import('./crypto.js');
-      const [timestamp, ...parts] = signature.split(',').map((p) => p.split('=')[1]);
-      const signed = `${timestamp}.${body}`;
-      const expected = await hmacSha256Hex(env.STRIPE_WEBHOOK_SECRET, signed);
-      const received = parts[0];
-
-      if (!timingSafeEqual(expected, received)) {
-        throw new Error('Webhook signature mismatch');
+    // Verify a Stripe webhook: HMAC-SHA256 over `${timestamp}.${payload}`
+    // with the endpoint secret, constant-time compare, 5-minute timestamp
+    // tolerance (replay window). Returns the parsed event or throws.
+    async verifyWebhook(signatureHeader, body) {
+      const parts = String(signatureHeader || '').split(',');
+      let timestamp = null;
+      const candidates = [];
+      for (const part of parts) {
+        const eq = part.indexOf('=');
+        if (eq === -1) continue;
+        const key = part.slice(0, eq).trim();
+        const value = part.slice(eq + 1).trim();
+        if (key === 't') timestamp = value;
+        if (key === 'v1') candidates.push(value);
+      }
+      if (!timestamp || candidates.length === 0) {
+        throw new Error('Webhook signature header malformed');
       }
 
-      const now = Math.floor(Date.now() / 1000);
-      const ts = parseInt(timestamp, 10);
-      if (Math.abs(now - ts) > 300) { // 5 min tolerance
-        throw new Error('Webhook timestamp too old');
+      const ts = Number.parseInt(timestamp, 10);
+      if (!Number.isInteger(ts) || Math.abs(Math.floor(Date.now() / 1000) - ts) > WEBHOOK_TOLERANCE_SECS) {
+        throw new Error('Webhook timestamp outside tolerance');
       }
+
+      const expected = await hmacSha256Hex(env.STRIPE_WEBHOOK_SECRET, `${timestamp}.${body}`);
+      // Constant-time comparison against every v1 candidate (Stripe sends
+      // multiple during secret rolls); no early exit on partial match.
+      let valid = false;
+      for (const candidate of candidates) {
+        if (timingSafeEqual(expected, candidate)) valid = true;
+      }
+      if (!valid) throw new Error('Webhook signature mismatch');
 
       return JSON.parse(body);
     },
   };
 }
 
-async function mockDriver(env) {
+function mockDriver(env) {
+  // Security: fail-closed — the mock driver must be impossible to reach in
+  // production, where it would confirm bookings without payment.
   if (env.ENVIRONMENT === 'production') {
     throw new Error('Mock payments driver cannot load in production');
   }
 
   return {
-    async createCheckout(bookingId, amountCents, childName, sessionId) {
-      const sessionId = uuid();
+    name: 'mock',
+
+    async createCheckout({ bookingId, amountCents, description }) {
+      const checkoutRef = `mock_${uuid()}`;
       logEvent('checkout_created', {
         booking_id: bookingId.slice(0, 8),
         amount_cents: amountCents,
         provider: 'mock',
-        session_id: sessionId.slice(0, 8),
       });
-
-      return { url: `/booking/mock-checkout?session_id=${sessionId}&booking_id=${bookingId}`, sessionId };
+      return { url: `/dev/mock-checkout?booking=${bookingId}`, checkoutRef };
     },
 
-    async verifyWebhook(signature, body) {
-      // Mock always accepts the payload as-is (for testing).
+    async verifyWebhook(signatureHeader, body) {
       return JSON.parse(body);
-    },
-
-    async completeCheckout(env, bookingId, sessionId) {
-      // Mock success: called from the mock checkout page.
-      return { success: true };
     },
   };
 }
 
-export async function getPaymentsDriver(env) {
-  if (env.PAYMENTS_DRIVER === 'stripe') {
-    return stripeDriver(env);
-  } else if (env.PAYMENTS_DRIVER === 'mock') {
-    return mockDriver(env);
-  } else {
-    throw new Error(`Unknown PAYMENTS_DRIVER: ${env.PAYMENTS_DRIVER}`);
-  }
+export function getPaymentsDriver(env) {
+  if (env.PAYMENTS_DRIVER === 'stripe') return stripeDriver(env);
+  if (env.PAYMENTS_DRIVER === 'mock') return mockDriver(env);
+  throw new Error(`Unknown PAYMENTS_DRIVER: ${env.PAYMENTS_DRIVER}`);
 }
-
-export const DEFAULT_STRIPE_WEBHOOK_DELAY_MS = 500; // webhook may lag by this much
