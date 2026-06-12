@@ -456,6 +456,15 @@ button:active {
   white-space: pre-line;
 }
 
+.mail-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.85rem;
+  background-color: var(--colour-bg);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm);
+}
+
 /* --- Misc --- */
 
 .account-section {

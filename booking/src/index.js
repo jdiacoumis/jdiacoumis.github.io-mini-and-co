@@ -60,6 +60,12 @@ import {
   handleAdminBookingsCsv,
   handleAdminCustomers,
 } from './routes/admin-bookings.js';
+import { handleStripeWebhook } from './routes/webhooks.js';
+import {
+  handleMockCheckout,
+  handleMockCheckoutPost,
+  handleDevMailbox,
+} from './routes/dev.js';
 
 // Security headers applied to every dynamic response (defence in depth: CSP
 // allows only same-origin scripts plus the Meta pixel, forms may only post to
@@ -197,8 +203,13 @@ route('GET', '/admin/customers', handleAdminCustomers);
 route('GET', '/api/health', async () => Response.json({ ok: true }));
 route('GET', '/api/bookings/:id/status', handleBookingStatus);
 
-// Stripe webhook (signature-verified — implemented in routes/webhooks).
-route('POST', '/api/stripe/webhook', async () => Response.json({ received: true }));
+// Stripe webhook (signature-verified; replay-protected).
+route('POST', '/api/stripe/webhook', handleStripeWebhook);
+
+// Development-only pages (404 in production — fail-closed inside each handler).
+route('GET', '/dev/mock-checkout', handleMockCheckout);
+route('POST', '/dev/mock-checkout', handleMockCheckoutPost);
+route('GET', '/dev/mailbox', handleDevMailbox);
 
 function withSecurityHeaders(response) {
   const headers = new Headers(response.headers);

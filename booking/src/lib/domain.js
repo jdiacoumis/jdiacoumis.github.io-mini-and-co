@@ -279,6 +279,32 @@ export function formatAud(cents) {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
+// Everything needed to notify the parent about a booking (confirmation email,
+// Conversions API): contact details plus child and session detail. Internal —
+// never exposed to request handlers that serve other accounts.
+export async function loadBookingForNotification(env, bookingId) {
+  const booking = await env.DB.prepare(
+    `SELECT b.id, b.status, b.amount_cents, b.capi_sent, u.email, u.phone, u.name AS parent_name,
+            c.name AS child_name
+     FROM bookings b
+     JOIN users u ON u.id = b.user_id
+     JOIN children c ON c.id = b.child_id
+     WHERE b.id = ?1`,
+  ).bind(bookingId).first();
+  if (!booking) return null;
+
+  const sessions = await env.DB.prepare(
+    `SELECT cs.starts_at, cs.duration_mins, cl.name AS class_name, cl.venue
+     FROM booking_sessions bs
+     JOIN class_sessions cs ON cs.id = bs.session_id
+     JOIN classes cl ON cl.id = cs.class_id
+     WHERE bs.booking_id = ?1
+     ORDER BY cs.starts_at`,
+  ).bind(bookingId).all();
+
+  return { ...booking, sessions: sessions.results || [] };
+}
+
 // Admin schedule view: sessions with live fullness (confirmed + unexpired
 // pending bookings count; lapsed pending and cancelled never count).
 export async function listSessionsWithFullness(env, { upcomingOnly = true } = {}) {

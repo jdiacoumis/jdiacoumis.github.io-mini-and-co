@@ -18,7 +18,7 @@
   - [x] Payment redirect and confirmation
   - [x] Parent dashboard
 - [x] 2.3 Admin portal: dashboard with fullness, class/session CRUD + weekly repeat, per-session roster (contacts, child age, consents, medical, payment status), bookings list with filters, mark-paid/cancel, customers, CSV export
-- [ ] 2.4 Stripe webhook endpoint: signature verification, replay protection, idempotent confirm; dev-only mock checkout + mailbox pages
+- [x] 2.4 Stripe webhook endpoint: signature verification, replay protection, idempotent confirm; dev-only mock checkout + mailbox pages
 - [ ] 2.5 Meta Pixel: first-party bootstrap (CSP-clean), funnel events, Purchase-once on confirmation, CAPI dedup from webhook; remove Lead-on-click from marketing pages
 - [ ] 2.6 Customer migration: CSV template, preview → commit import (idempotent), externally-paid enrolment bookings, magic-link invite emails
 
