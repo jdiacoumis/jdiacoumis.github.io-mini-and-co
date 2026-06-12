@@ -154,6 +154,19 @@ export async function handleVerifyToken(req, env) {
 
 // POST /auth/verify — atomically consume the token and establish a session.
 export async function handleVerifyTokenPost(req, env) {
+  // Security: login-CSRF defence. A cross-site page must not be able to
+  // auto-submit an attacker's token and silently sign the victim into the
+  // attacker's account (where anything they enter becomes attacker-visible).
+  // The legitimate submit always comes from our own verify page, so a
+  // cross-site Origin / Sec-Fetch-Site is rejected outright.
+  const origin = req.headers.get('Origin');
+  const fetchSite = req.headers.get('Sec-Fetch-Site');
+  if ((origin && origin !== new URL(req.url).origin)
+    || (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none')) {
+    logEvent('login_csrf_rejected', {});
+    throw badRequest('Please open the sign-in link from your email again.');
+  }
+
   const form = await parseForm(req);
   const token = String(form.get('token') || '');
   const next = safeNextPath(String(form.get('next') || ''), '/account');

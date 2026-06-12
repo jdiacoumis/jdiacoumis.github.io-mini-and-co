@@ -92,9 +92,10 @@ function stripeDriver(env) {
 }
 
 function mockDriver(env) {
-  // Security: fail-closed — the mock driver must be impossible to reach in
-  // production, where it would confirm bookings without payment.
-  if (env.ENVIRONMENT === 'production') {
+  // Security: fail-closed — the mock driver would confirm bookings without
+  // payment, so it loads only when the environment is EXPLICITLY development;
+  // a missing or unexpected ENVIRONMENT value behaves like production.
+  if (env.ENVIRONMENT !== 'development') {
     throw new Error('Mock payments driver cannot load in production');
   }
 

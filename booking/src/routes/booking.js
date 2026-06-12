@@ -17,6 +17,8 @@ import {
   sweepExpiredBookings, formatAud,
 } from '../lib/domain.js';
 import { getPaymentsDriver } from '../lib/payments-driver.js';
+import { allowRate } from '../lib/ratelimit.js';
+import { tooMany } from '../lib/http.js';
 import { logEvent, logError } from '../lib/log.js';
 
 const MEDICAL_NOTES_MAX = 2000;
@@ -224,6 +226,13 @@ export async function handleCheckoutPost(req, env) {
   // payment session is created (booking-flow spec).
   if (!waiverAccepted || !isYesNo(photoConsent)) {
     throw badRequest('Please accept the waiver and answer the photo consent question before continuing to payment.');
+  }
+
+  // Security: pending bookings hold seats for 35 minutes — rate limit booking
+  // creation per account so one signed-in user cannot hold a term's seats
+  // hostage by spamming checkouts (resource-exhaustion abuse, API4/CWE-400).
+  if (!(await allowRate(env, `checkout:user:${user.userId}`, 8, 900))) {
+    throw tooMany('You have started quite a few bookings in a short time — please give it a few minutes and try again.');
   }
 
   const result = await createPendingBooking(env, {

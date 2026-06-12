@@ -15,7 +15,9 @@ export async function allowRate(env, key, limit, windowSecs) {
      RETURNING count`,
   ).bind(fullKey, windowStart).first();
   const allowed = (row?.count ?? 1) <= limit;
-  if (!allowed) logEvent('rate_limit_exceeded', { key: fullKey });
+  // Security: keys can embed an email address — log only the key's prefix
+  // (the scope name), never the identifying part (PII-safe logging).
+  if (!allowed) logEvent('rate_limit_exceeded', { scope: fullKey.split(':')[0] });
   return allowed;
 }
 

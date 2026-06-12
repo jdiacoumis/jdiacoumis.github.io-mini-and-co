@@ -26,16 +26,15 @@ function json(status, body) {
   return Response.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
 }
 
-// Record an event id; returns false if it was already processed (replay).
+// Record an event id; returns false ONLY for a genuine replay (primary-key
+// conflict). Any other database failure propagates so the webhook returns a
+// 5xx and Stripe retries — a transient error must never be acknowledged as
+// processed.
 async function recordWebhookEvent(env, eventId) {
-  try {
-    await env.DB.prepare(
-      `INSERT INTO webhook_events (event_id, received_at) VALUES (?1, ?2)`,
-    ).bind(eventId, nowIso()).run();
-    return true;
-  } catch {
-    return false; // primary-key conflict → already seen
-  }
+  const result = await env.DB.prepare(
+    `INSERT OR IGNORE INTO webhook_events (event_id, received_at) VALUES (?1, ?2)`,
+  ).bind(eventId, nowIso()).run();
+  return result.meta.changes > 0;
 }
 
 // Send the booking confirmation email. Failure is logged, never thrown.

@@ -31,7 +31,7 @@
 
 - [x] 4.1 Unit tests: escaping, validation, time conversion (AEST/AEDT), webhook signature, rate limiting, capacity race via guarded batch
 - [x] 4.2 Scripted end-to-end journey on wrangler dev: parent (magic link → child → waiver → mock pay → confirmed + pixel data) and admin (schedule CRUD → roster → import → export); asset-exposure checks (/booking/src, /openspec → 404)
-- [ ] 4.3 Adversarial security review across lenses (authz/IDOR, XSS/CSP, CSRF, injection, session/crypto, webhook integrity, rate limiting); fix confirmed findings
+- [x] 4.3 Adversarial security review across lenses (authz/IDOR, XSS/CSP, CSRF, injection, session/crypto, webhook integrity, rate limiting); fix confirmed findings
 
 ## 5. Documentation
 

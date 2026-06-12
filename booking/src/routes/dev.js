@@ -15,8 +15,11 @@ import { processCheckoutEvent } from './webhooks.js';
 import { uuid } from '../lib/db.js';
 import { logEvent } from '../lib/log.js';
 
+// Security: fail-closed — dev pages exist only when the environment is
+// EXPLICITLY development. A missing or unexpected ENVIRONMENT value gets the
+// production behaviour (404), never the permissive one.
 function assertDevEnvironment(env) {
-  if (env.ENVIRONMENT === 'production') throw notFound();
+  if (env.ENVIRONMENT !== 'development') throw notFound();
 }
 
 // GET /dev/mock-checkout?booking=… — stand-in for Stripe's hosted page.
