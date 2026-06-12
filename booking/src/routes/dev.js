@@ -83,9 +83,25 @@ export async function handleMockCheckoutPost(req, env) {
   return redirect(`/book/confirm?booking=${booking.id}`, 303);
 }
 
+// Render an email body as escaped text with http(s) URLs turned into
+// clickable links — so the magic-link journey is one click in local dev.
+// Everything still flows through the escaping template; only the URL itself
+// (matched, then escaped) lands in the href.
+function linkifyBody(text) {
+  const parts = [];
+  const urlPattern = /https?:\/\/[^\s<>"]+/g;
+  let last = 0;
+  for (const match of String(text || '').matchAll(urlPattern)) {
+    parts.push(html`${text.slice(last, match.index)}`);
+    parts.push(html`<a href="${match[0]}">${match[0]}</a>`);
+    last = match.index + match[0].length;
+  }
+  parts.push(html`${String(text || '').slice(last)}`);
+  return joinHtml(parts);
+}
+
 // GET /dev/mailbox — the console email driver's outbox, with the most recent
-// messages first. Bodies render as plain text (escaped); links are visible
-// to copy rather than rendered live HTML.
+// messages first. Bodies render as escaped text with clickable links.
 export async function handleDevMailbox(req, env) {
   assertDevEnvironment(env);
 
@@ -98,7 +114,7 @@ export async function handleDevMailbox(req, env) {
     <article class="class-card">
       <h2>${e.subject}</h2>
       <p class="class-meta">To ${e.to_email} · ${e.created_at}</p>
-      <pre class="mail-body">${e.body_text}</pre>
+      <pre class="mail-body">${linkifyBody(e.body_text)}</pre>
     </article>
   `);
 
