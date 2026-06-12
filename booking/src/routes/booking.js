@@ -17,6 +17,7 @@ import {
   sweepExpiredBookings, sessionsAlreadyBookedForChild, formatAud,
 } from '../lib/domain.js';
 import { getPaymentsDriver } from '../lib/payments-driver.js';
+import { waiverHtml } from '../lib/waiver.js';
 import { allowRate } from '../lib/ratelimit.js';
 import { tooMany } from '../lib/http.js';
 import { logEvent, logError } from '../lib/log.js';
@@ -256,13 +257,13 @@ export async function handleCheckout(req, env) {
         <label><input type="radio" name="photo_consent" value="no" ${consent === 'no' ? 'checked' : ''}> No, please keep my child out of photos</label>
       </fieldset>
 
-      <h2>Waiver and terms</h2>
-      <div class="waiver-text">
-        <p>I understand that Mini &amp; Co. sensory classes involve supervised play and that I (or the accompanying adult) remain responsible for my child at all times during the session. I have disclosed all relevant medical conditions and allergies above. I understand classes involve sensory materials (water, textures, food-safe items) and will guide my child's participation according to their needs. Bookings are transferable to another session where space allows; please contact us as early as possible if you can't make it.</p>
+      <h2>Terms &amp; Conditions</h2>
+      <div class="waiver-text" tabindex="0">
+        ${waiverHtml}
         <p class="waiver-version">Waiver version ${env.WAIVER_VERSION}</p>
       </div>
       <div class="form-group">
-        <label><input type="checkbox" name="waiver" value="accepted" required> I accept the waiver and terms above</label>
+        <label><input type="checkbox" name="waiver" value="accepted" required> I have read and accept the Terms &amp; Conditions and Cancellation Policy above</label>
       </div>
 
       <button type="submit">Continue to payment</button>

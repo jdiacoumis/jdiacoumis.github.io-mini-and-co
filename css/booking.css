@@ -344,8 +344,18 @@ button:active {
   background-color: var(--colour-bg-warm);
   border-radius: var(--radius-md);
   padding: var(--space-sm) var(--space-md);
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   color: var(--colour-text-soft);
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
+.waiver-text h3 {
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--colour-text);
+  margin: var(--space-sm) 0 var(--space-2xs);
 }
 
 .waiver-version {

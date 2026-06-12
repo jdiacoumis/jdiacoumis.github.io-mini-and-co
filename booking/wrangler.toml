@@ -31,7 +31,7 @@ PUBLIC_BASE_URL = "https://miniandcosensoryclasses.com"
 EMAIL_FROM = "Mini & Co. <bookings@miniandcosensoryclasses.com>"
 ADMIN_EMAILS = "miniandco.classes@gmail.com"
 META_PIXEL_ID = "1991468878409217"
-WAIVER_VERSION = "2026-06"
+WAIVER_VERSION = "2026-05-14"
 
 [observability.logs]
 enabled = true
