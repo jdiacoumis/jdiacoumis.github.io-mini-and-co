@@ -60,6 +60,13 @@ import {
   handleAdminBookingsCsv,
   handleAdminCustomers,
 } from './routes/admin-bookings.js';
+import {
+  handleImport,
+  handleImportTemplate,
+  handleImportPreview,
+  handleImportCommit,
+  handleImportInvites,
+} from './routes/admin-import.js';
 import { handleStripeWebhook } from './routes/webhooks.js';
 import {
   handleMockCheckout,
@@ -198,6 +205,11 @@ route('POST', '/admin/bookings/:id/mark-paid', handleAdminMarkPaid);
 route('POST', '/admin/bookings/:id/cancel', handleAdminCancelBooking);
 route('POST', '/admin/bookings.csv', handleAdminBookingsCsv);
 route('GET', '/admin/customers', handleAdminCustomers);
+route('GET', '/admin/import', handleImport);
+route('GET', '/admin/import/template.csv', handleImportTemplate);
+route('POST', '/admin/import/preview', handleImportPreview);
+route('POST', '/admin/import/commit', handleImportCommit);
+route('POST', '/admin/import/invites', handleImportInvites);
 
 // APIs.
 route('GET', '/api/health', async () => Response.json({ ok: true }));
