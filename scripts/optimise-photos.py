@@ -1,7 +1,7 @@
 """Optimise raw photographs from photos-staging/ into web-ready outputs in assets/photos/.
 
 For each raw original at the top level of photos-staging/ (jpg/jpeg/png, case-insensitive),
-this script emits six files into assets/photos/:
+this script emits up to six files into assets/photos/:
 
     <slug>-600.jpg   <slug>-600.webp
     <slug>-1200.jpg  <slug>-1200.webp
@@ -10,6 +10,10 @@ this script emits six files into assets/photos/:
 Where <slug> is the source filename's stem. The image is resized so its width matches
 the target (preserving aspect ratio; never upscaled). JPGs default to quality 82, WebPs
 to quality 80 — conventional sweet spots for photography.
+
+A target width is skipped when a smaller target already covers the full source width,
+so no byte-identical duplicates are written: a 1024px-wide source yields only the 600
+and 1200 variants, while a larger original yields all three.
 
 The script is idempotent: it skips a source if all six outputs exist and each one's
 mtime is at least as new as the source. Pass --force to bypass that check.
@@ -50,11 +54,37 @@ def find_sources() -> list[Path]:
     )
 
 
+def effective_widths(source_width: int) -> tuple[int, ...]:
+    """Target widths to emit for a source of the given width.
+
+    Widths are taken from WIDTHS in ascending order, up to and including the first
+    that is >= the source width. Any larger widths would only reproduce that same
+    full-size render (the encoder never upscales), so they are skipped to avoid
+    byte-identical duplicates. A 1024px source therefore yields (600, 1200).
+    """
+    chosen: list[int] = []
+    for w in WIDTHS:
+        chosen.append(w)
+        if w >= source_width:
+            break
+    return tuple(chosen)
+
+
+def source_width(source: Path) -> int:
+    """Visually-correct width of a source (after applying EXIF orientation)."""
+    with Image.open(source) as image:
+        return ImageOps.exif_transpose(image).width
+
+
 def expected_outputs(source: Path) -> list[tuple[Path, str, int]]:
-    """Six (path, format, target_width) tuples for a source's outputs."""
+    """(path, format, target_width) tuples for a source's outputs.
+
+    Emits up to six — fewer when the source is smaller than a target width (see
+    effective_widths).
+    """
     slug = source.stem
     outputs: list[tuple[Path, str, int]] = []
-    for w in WIDTHS:
+    for w in effective_widths(source_width(source)):
         outputs.append((OUT_DIR / f"{slug}-{w}.jpg", "jpg", w))
         outputs.append((OUT_DIR / f"{slug}-{w}.webp", "webp", w))
     return outputs
