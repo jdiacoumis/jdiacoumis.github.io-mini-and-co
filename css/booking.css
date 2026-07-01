@@ -1,0 +1,547 @@
+/* Booking pages stylesheet — server-rendered pages under /book, /account,
+   /auth and /admin. Extends css/styles.css and reuses its brand tokens. */
+
+.booking-body {
+  display: flex;
+  min-height: 100vh;
+  flex-direction: column;
+}
+
+/* --- Header / footer ---
+   The booking layout reuses the marketing site's header/footer markup and
+   classes (styled by styles.css). Only the sign-out control is new: a POST
+   form whose button must read exactly like a nav link. */
+
+.nav-signout-form {
+  display: inline;
+  margin: 0;
+}
+
+button.nav-signout {
+  background: none;
+  border: none;
+  cursor: pointer;
+  width: auto;
+}
+
+button.nav-signout:hover {
+  background: none;
+}
+
+.booking-main {
+  flex: 1;
+  width: 100%;
+  max-width: var(--max-width-narrow);
+  margin: 0 auto;
+  padding: var(--space-lg) var(--space-md) var(--space-2xl);
+}
+
+/* --- Typography --- */
+
+.booking-main h1 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(2rem, 1.6rem + 1.5vw, 2.75rem);
+  line-height: 1.15;
+  margin: 0 0 var(--space-sm);
+}
+
+.booking-main h2 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 1.4rem;
+  margin: var(--space-lg) 0 var(--space-xs);
+}
+
+.booking-main .lede {
+  color: var(--colour-text-soft);
+  max-width: var(--max-width-prose);
+}
+
+/* --- Forms --- */
+
+.booking-form {
+  max-width: var(--max-width-narrow);
+  margin: var(--space-md) 0;
+}
+
+.form-group {
+  margin-bottom: var(--space-md);
+}
+
+.form-group label,
+.form-group legend {
+  display: block;
+  margin-bottom: var(--space-2xs);
+  font-weight: 400;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="tel"],
+input[type="date"],
+input[type="time"],
+input[type="number"],
+textarea,
+select {
+  width: 100%;
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--colour-line);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-body);
+  font-size: 1rem;
+  background-color: #fff;
+  color: var(--colour-text);
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--colour-accent-sage);
+  box-shadow: 0 0 0 3px rgba(174, 189, 161, 0.18);
+}
+
+.consent-group {
+  border: 1px solid var(--colour-line);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+}
+
+.consent-group legend {
+  padding: 0 var(--space-2xs);
+  font-weight: 400;
+}
+
+.consent-group label {
+  display: block;
+  margin: var(--space-2xs) 0;
+  font-weight: 300;
+}
+
+.consent-group input,
+.form-group input[type="checkbox"],
+.form-group input[type="radio"] {
+  width: auto;
+  margin-right: var(--space-2xs);
+}
+
+button,
+.button-link {
+  display: inline-block;
+  padding: var(--space-xs) var(--space-md);
+  background-color: var(--colour-text);
+  color: var(--colour-bg);
+  border: none;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 1rem;
+  font-weight: 400;
+  text-decoration: none;
+  transition: background-color var(--transition), transform var(--transition);
+}
+
+button:hover,
+.button-link:hover {
+  background-color: var(--colour-text-soft);
+}
+
+button:active {
+  transform: scale(0.98);
+}
+
+.button-secondary {
+  background-color: transparent;
+  color: var(--colour-text);
+  border: 1px solid var(--colour-line);
+}
+
+.button-secondary:hover {
+  background-color: var(--colour-bg-warm);
+}
+
+.button-danger {
+  background-color: #a04545;
+}
+
+.button-danger:hover {
+  background-color: #b65d5d;
+}
+
+.form-error {
+  background-color: var(--colour-bg-blush);
+  border: 1px solid var(--colour-accent-blush);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+  color: var(--colour-text);
+}
+
+/* --- Page header with action --- */
+
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.page-head h1 {
+  margin: 0;
+}
+
+.account-signed-in {
+  color: var(--colour-text-muted);
+  font-size: 0.9rem;
+  margin-top: var(--space-2xs);
+}
+
+/* --- Class list --- */
+
+.class-card {
+  background-color: #fff;
+  border: 1px solid var(--colour-line-soft);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+  padding: var(--space-md) var(--space-lg);
+  margin: var(--space-md) 0;
+}
+
+.class-card h2 {
+  margin-top: 0;
+}
+
+.class-meta {
+  color: var(--colour-text-muted);
+  font-size: 0.9rem;
+  margin-top: calc(-1 * var(--space-2xs));
+}
+
+.trial-line {
+  background-color: var(--colour-bg-sage);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.term-group {
+  border-top: 1px solid var(--colour-line-soft);
+  margin-top: var(--space-md);
+  padding-top: var(--space-xs);
+}
+
+.term-group h3 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 1.25rem;
+  margin: var(--space-xs) 0;
+}
+
+.term-range {
+  color: var(--colour-text-muted);
+  font-family: var(--font-body);
+  font-weight: 300;
+  font-size: 0.9rem;
+}
+
+.slot-group {
+  margin: var(--space-sm) 0;
+}
+
+.slot-group h4 {
+  margin: 0 0 var(--space-2xs);
+  font-weight: 500;
+}
+
+.slot-sessions {
+  margin-top: var(--space-xs);
+}
+
+.slot-sessions summary {
+  cursor: pointer;
+  color: var(--colour-text-soft);
+  font-size: 0.9rem;
+}
+
+.term-list {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-xs) 0;
+}
+
+.term-list li {
+  padding: var(--space-2xs) 0;
+  border-top: 1px solid var(--colour-line-soft);
+}
+
+.session-list {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-sm) 0 0;
+}
+
+.session-option {
+  border-top: 1px solid var(--colour-line-soft);
+  padding: var(--space-xs) 0;
+}
+
+.session-option label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  cursor: pointer;
+}
+
+.session-option-full {
+  color: var(--colour-text-muted);
+}
+
+.session-when {
+  font-weight: 400;
+  min-width: 16rem;
+}
+
+.session-meta {
+  color: var(--colour-text-soft);
+}
+
+.session-spots {
+  margin-left: auto;
+  color: var(--colour-accent-sage);
+  font-size: 0.9rem;
+}
+
+.session-full {
+  margin-left: auto;
+  color: var(--colour-text-muted);
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* --- Checkout --- */
+
+.checkout-sessions {
+  list-style: none;
+  padding: 0;
+}
+
+.checkout-session {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  border-bottom: 1px solid var(--colour-line-soft);
+  padding: var(--space-2xs) 0;
+}
+
+.checkout-total {
+  text-align: right;
+  font-size: 1.1rem;
+}
+
+.waiver-text {
+  background-color: var(--colour-bg-warm);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  font-size: 0.9rem;
+  color: var(--colour-text-soft);
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
+.waiver-text h3 {
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--colour-text);
+  margin: var(--space-sm) 0 var(--space-2xs);
+}
+
+.waiver-version {
+  font-size: 0.8rem;
+  color: var(--colour-text-muted);
+}
+
+.child-chooser {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  max-width: 24rem;
+}
+
+/* --- Confirmation --- */
+
+.confirm-panel {
+  background-color: #fff;
+  border: 1px solid var(--colour-line-soft);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+  padding: var(--space-lg);
+}
+
+.confirm-paid {
+  border-color: var(--colour-accent-sage);
+}
+
+.confirm-sessions {
+  padding-left: 1.2rem;
+}
+
+.session-venue {
+  color: var(--colour-text-muted);
+}
+
+/* --- Tables (account, admin) --- */
+
+.booking-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--space-sm) 0;
+  background-color: #fff;
+  border: 1px solid var(--colour-line-soft);
+  border-radius: var(--radius-sm);
+}
+
+.booking-table th,
+.booking-table td {
+  text-align: left;
+  padding: var(--space-xs) var(--space-sm);
+  border-bottom: 1px solid var(--colour-line-soft);
+  font-size: 0.95rem;
+}
+
+.booking-table th {
+  font-weight: 500;
+  color: var(--colour-text-soft);
+}
+
+.table-actions a {
+  margin-right: var(--space-xs);
+}
+
+.status {
+  display: inline-block;
+  padding: 0.1rem 0.6rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.85rem;
+}
+
+.status-confirmed { background-color: var(--colour-bg-sage); }
+.status-pending { background-color: var(--colour-bg-warm); }
+.status-cancelled,
+.status-expired { background-color: var(--colour-line-soft); color: var(--colour-text-muted); }
+
+/* --- Admin --- */
+
+.admin-nav {
+  display: flex;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--colour-line);
+  padding-bottom: var(--space-xs);
+  margin-bottom: var(--space-md);
+}
+
+.admin-nav a {
+  color: var(--colour-text-soft);
+  text-decoration: none;
+  font-size: 0.95rem;
+}
+
+.admin-nav a:hover {
+  color: var(--colour-text);
+}
+
+.form-notice {
+  background-color: var(--colour-bg-sage);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.inline-form {
+  display: inline-block;
+  margin: var(--space-2xs) 0;
+}
+
+.button-small {
+  padding: 0.2rem 0.8rem;
+  font-size: 0.85rem;
+}
+
+.filter-links a {
+  margin-right: var(--space-2xs);
+}
+
+.filter-active {
+  font-weight: 600;
+}
+
+.muted {
+  color: var(--colour-text-muted);
+  font-size: 0.85rem;
+}
+
+.row-cancelled {
+  opacity: 0.55;
+}
+
+.roster-medical {
+  max-width: 18rem;
+  white-space: pre-line;
+}
+
+.mail-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.85rem;
+  background-color: var(--colour-bg);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm);
+}
+
+/* --- Misc --- */
+
+.account-section {
+  margin: var(--space-md) 0;
+}
+
+.account-section h2 {
+  margin: var(--space-sm) 0 var(--space-2xs);
+}
+
+.account-children {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-2xs) 0;
+}
+
+.account-children li {
+  padding: var(--space-2xs) 0;
+}
+
+.notice-list {
+  background-color: var(--colour-bg-blush);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md) var(--space-sm) var(--space-lg);
+}
+
+.error-container {
+  text-align: center;
+  padding: var(--space-2xl) var(--space-md);
+}
+
+.error-container h1 {
+  font-size: 4rem;
+  font-weight: 300;
+  margin: 0 0 var(--space-sm);
+  color: var(--colour-accent-blush);
+}
+
+.error-container h2 {
+  font-size: 1.5rem;
+  font-weight: 400;
+  margin: 0 0 var(--space-md);
+}

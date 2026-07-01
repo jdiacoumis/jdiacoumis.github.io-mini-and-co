@@ -41,9 +41,6 @@
     'https://connect.facebook.net/en_US/fbevents.js');
     fbq('init', '1991468878409217');
     fbq('track', 'PageView', {}, {eventID: crypto.randomUUID()});
-    function trackLead() {
-      if (window.fbq) fbq('track', 'Lead', {}, {eventID: crypto.randomUUID()});
-    }
   </script>
   <noscript><img height="1" width="1" style="display:none"
     src="https://www.facebook.com/tr?id=1991468878409217&amp;ev=PageView&amp;noscript=1" alt=""></noscript>
@@ -124,7 +121,7 @@
       <div class="container container-narrow">
         <h2>Come and see what calm feels like.</h2>
         <p class="lede">Wednesday classes are open to book — pick a time that suits and come along.</p>
-        <a class="button" href="https://mini-co-sensory.classforkids.io" target="_blank" rel="noopener" onclick="trackLead();">Book now</a>
+        <a class="button" href="/book/">Book now</a>
       </div>
     </section>
 
