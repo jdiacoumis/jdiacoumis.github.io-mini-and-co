@@ -41,3 +41,6 @@ build/
 
 # Partnership packs — local-only artifacts not for the public site
 /partnerships/
+
+# Business briefs — private context (financials, staff, partners), never publish
+/business/
