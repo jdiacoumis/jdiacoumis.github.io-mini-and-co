@@ -25,6 +25,7 @@ python3 scripts/export-banner.py --print-size 841x2055 --dpi 300  # print-spec c
 python3 scripts/export-flyer.py             # A4 portrait flyer → assets/flyer/flyer.{svg,png}
 python3 scripts/export-flyer.py --dpi 300   # higher-res override (default 200)
 python3 scripts/export-logo.py              # Instagram tile variants → assets/logo/instagram/
+python3 scripts/export-ebook.py             # A5 "Play at Home" booklet (HTML → headless Chromium) → assets/ebook/play-at-home.pdf
 python3 scripts/optimise-photos.py          # photos-staging/*.{jpg,jpeg,png} → assets/photos/<slug>-<width>.{jpg,webp}
 python3 scripts/optimise-photos.py --force  # re-export every photo regardless of mtime
 ```
