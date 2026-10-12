@@ -116,14 +116,15 @@
   <text x="105.0" y="194" text-anchor="middle" class="display-italic"
         font-size="7" fill="#6b5466" letter-spacing="0.2">Oran Park Library  ·  Sandown Room</text>
 
-  <!-- ===== NOW ENROLLING (dated — the flyer carries what the banner omits) ===== -->
+  <!-- ===== TERMS (evergreen — no dates or prices, so the flyer survives
+       every term rollover; current dates live on the site behind the QR) ===== -->
   <text x="105.0" y="209" text-anchor="middle" class="eyebrow"
-        font-size="5" fill="#8d7d8a">Now enrolling</text>
+        font-size="5" fill="#8d7d8a">Classes run in terms</text>
   <line x1="91.0" y1="213" x2="119.0" y2="213" stroke="#b39db0" stroke-width="0.3"/>
   <circle cx="105.0" cy="213" r="0.7" fill="#b39db0"/>
 
   <text x="105.0" y="224" text-anchor="middle" class="display"
-        font-size="11" fill="#3d2a3d" letter-spacing="0.2">Term 3 begins  ·  Wednesday 22 July</text>
+        font-size="11" fill="#3d2a3d" letter-spacing="0.2">New families welcome each term</text>
 
   <!-- ===== BOOK NOW PANEL (warm blush) — booking CTA + key contacts ===== -->
   <rect x="20" y="234" width="170" height="46" rx="5" fill="#eccfc3"/>

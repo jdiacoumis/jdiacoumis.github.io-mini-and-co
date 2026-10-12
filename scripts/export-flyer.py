@@ -223,14 +223,15 @@ def build_svg() -> str:
   <text x="{cx}" y="194" text-anchor="middle" class="display-italic"
         font-size="7" fill="{TEXT_SOFT}" letter-spacing="0.2">Oran Park Library  ·  Sandown Room</text>
 
-  <!-- ===== NOW ENROLLING (dated — the flyer carries what the banner omits) ===== -->
+  <!-- ===== TERMS (evergreen — no dates or prices, so the flyer survives
+       every term rollover; current dates live on the site behind the QR) ===== -->
   <text x="{cx}" y="209" text-anchor="middle" class="eyebrow"
-        font-size="5" fill="{TEXT_MUTED}">Now enrolling</text>
+        font-size="5" fill="{TEXT_MUTED}">Classes run in terms</text>
   <line x1="{cx - 14}" y1="213" x2="{cx + 14}" y2="213" stroke="{ORNAMENT}" stroke-width="0.3"/>
   <circle cx="{cx}" cy="213" r="0.7" fill="{ORNAMENT}"/>
 
   <text x="{cx}" y="224" text-anchor="middle" class="display"
-        font-size="11" fill="{PLUM}" letter-spacing="0.2">Term 3 begins  ·  Wednesday 22 July</text>
+        font-size="11" fill="{PLUM}" letter-spacing="0.2">New families welcome each term</text>
 
   <!-- ===== BOOK NOW PANEL (warm blush) — booking CTA + key contacts ===== -->
   <rect x="20" y="234" width="170" height="46" rx="5" fill="{PANEL_BLUSH}"/>
