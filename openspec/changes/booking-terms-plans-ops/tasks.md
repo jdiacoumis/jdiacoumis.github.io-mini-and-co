@@ -26,13 +26,13 @@
 - [ ] 2A.4 Emails: confirmation with plan schedule; trial follow-up offer the day after the trial (cron job registered via `lib/cron.js`)
 
 ### 2B Admin operations (owns `routes/admin.js`, `routes/admin-bookings.js`, `routes/admin-terms.js`, `routes/admin-ops.js`, `routes/admin-import.js`, `lib/admin-ops.js`, `lib/csv.js`, admin section of `css/booking.css`)
-- [ ] 2B.1 Terms: create (dates, weeks, holiday skip dates, prices, plan options, opening windows) generating sessions; edit term and sessions later (add/remove weeks, change prices for future bookings only); close
-- [ ] 2B.2 Re-run a term: copy from a previous term with new dates/prices; auto-enrol current families as pending bookings held until the returning window closes, with re-enrol emails; trial/casual families excluded by default
-- [ ] 2B.3 Term grid: families × weeks, attendance marks, payment column (paid / plan k of n / overdue / unpaid, amount owing), seats left per week; CSV export
-- [ ] 2B.4 Roster: attendance marking with big touch targets; current profile shown beside the booking snapshot (stricter consent wins); staff may view and mark
-- [ ] 2B.5 Manual booking: existing or new parent and child, kind, term/remaining/sessions, offline payment recorded now or pay-later link (7-day hold); complimentary bookings
-- [ ] 2B.6 Transfers (one session to another with a seat), cancel one week with optional credit, cancel whole booking; credits list; vouchers CRUD; record offline payment; customer and child edit; admin notes
-- [ ] 2B.7 Needs-attention list and "Check with Stripe" (retrieve checkout/subscription and reconcile through the guarded path); cancel a session (reason) calling `notifySessionCancelled` and issuing credits to term families
+- [x] 2B.1 Terms: create (dates, weeks, holiday skip dates, prices, plan options, opening windows) generating sessions; edit term and sessions later (add/remove weeks, change prices for future bookings only); close
+- [x] 2B.2 Re-run a term: copy from a previous term with new dates/prices; auto-enrol current families as pending bookings held until the returning window closes, with re-enrol emails; trial/casual families excluded by default
+- [x] 2B.3 Term grid: families × weeks, attendance marks, payment column (paid / plan k of n / overdue / unpaid, amount owing), seats left per week; CSV export
+- [x] 2B.4 Roster: attendance marking with big touch targets; current profile shown beside the booking snapshot (stricter consent wins); staff may view and mark
+- [x] 2B.5 Manual booking: existing or new parent and child, kind, term/remaining/sessions, offline payment recorded now or pay-later link (7-day hold); complimentary bookings
+- [x] 2B.6 Transfers (one session to another with a seat), cancel one week with optional credit, cancel whole booking; credits list; vouchers CRUD; record offline payment; customer and child edit; admin notes
+- [x] 2B.7 Needs-attention list and "Check with Stripe" (retrieve checkout/subscription and reconcile through the guarded path); cancel a session (reason) calling `notifySessionCancelled` and issuing credits to term families
 
 ### 2C Waitlist admin, comms, docs (owns `routes/admin-waitlist.js`, `routes/admin-email.js`, `lib/notify.js`, `lib/emails/ops.js`, cron jobs for reminders/overdue/offers, `booking/OWNER-GUIDE.md`, `README.md`, `DEPLOYMENT.md`, `MIGRATION.md`)
 - [ ] 2C.1 Waitlist admin: list per term in join order, offer (remaining term / trial / chosen weeks) creating a held pending booking with a 48-hour expiry and an email, remove, mark declined; lapsed offers release the seat and return the entry to waiting
