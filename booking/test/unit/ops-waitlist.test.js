@@ -272,6 +272,9 @@ test('the waitlist page lists entries in join order, escaped, with offer and mes
   const quote = await offerPage.handler(request('GET', '/admin/waitlist/wv-1/offer?kind=term', { cookie: admin.cookie }), env, { id: 'wv-1' });
   const quoteBody = await quote.text();
   assert.equal(quote.status, 200);
+  for (const page of [body, quoteBody]) {
+    assert.ok(!/\bundefined\b|\bnull\b|\[object /.test(page.replace(/<[^>]*>/g, ' ')), 'no rendering artefacts');
+  }
   assert.ok(quoteBody.includes('name="price" value="168.00"'));
   assert.ok(quoteBody.includes('The family pays'));
   const send = routes.find((r) => r.method === 'POST' && r.pattern === '/admin/waitlist/:id/offer');

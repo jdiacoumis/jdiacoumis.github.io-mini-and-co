@@ -147,9 +147,9 @@ export function readCompose(get) {
 }
 
 function audienceDescription(audience, term) {
-  if (audience === 'all') return "every current family (everyone booked into a class that's still to come)";
+  if (audience === 'all') return "every current family (anyone booked into a class that's still to come)";
   const name = term ? `${term.class_name} — ${term.name}` : 'the term';
-  return audience === 'waitlist' ? `the families on the ${name} waitlist` : `the families booked into ${name}`;
+  return audience === 'waitlist' ? `everyone on the ${name} waitlist` : `everyone booked into ${name}`;
 }
 
 function composeForm(user, terms, values) {
@@ -273,7 +273,7 @@ export async function handlePreviewPost(req, env) {
     <div class="ops-page">
       <h1>Check your email</h1>
       ${count
-        ? html`<p class="lede">This will go to <strong>${count} ${count === 1 ? 'family' : 'families'}</strong> —
+        ? html`<p class="lede">This will go to <strong>${count} ${count === 1 ? 'family' : 'families'}</strong>:
             ${audienceDescription(values.audience, term)}. Each family gets their own copy, starting with their own name.</p>`
         : html`<p class="form-error" role="alert">Nobody matches — there's no one to send this to. Choose another group below.</p>`}
       ${count ? html`
@@ -397,11 +397,11 @@ export async function handleEmailLog(req, env) {
 
   const tableRows = shown.map((r) => html`
     <tr class="${r.status === 'failed' ? 'row-attention' : ''}">
-      <td>${formatSydney(r.sent_at)}</td>
-      <td>${r.to_email}</td>
-      <td>${templateLabel(r.template)}<br><span class="muted">${r.subject}</span></td>
-      <td>${r.term_name ? html`${r.class_name} — ${r.term_name}` : '—'}</td>
-      <td>${r.status === 'sent' ? 'Sent' : html`<span class="email-status-failed">Failed</span>${r.error ? html`<br><span class="muted">${r.error}</span>` : ''}`}</td>
+      <td data-label="When">${formatSydney(r.sent_at)}</td>
+      <td data-label="To">${r.to_email}</td>
+      <td data-label="Email">${templateLabel(r.template)}<br><span class="muted">${r.subject}</span></td>
+      <td data-label="Term">${r.term_name ? html`${r.class_name} — ${r.term_name}` : '—'}</td>
+      <td data-label="Status">${r.status === 'sent' ? 'Sent' : html`<span class="email-status-failed">Failed</span>${r.error ? html`<br><span class="muted">${r.error}</span>` : ''}`}</td>
     </tr>
   `);
 

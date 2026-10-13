@@ -92,7 +92,7 @@ test('sending a batch emails each parent once; repeating the batch sends nothing
   assert.deepEqual([again.sent, again.skipped, again.failed], [0, 3, 0]);
   assert.equal(await count(`SELECT COUNT(*) AS n FROM dev_emails WHERE to_email = 'em@example.com' AND subject = 'Theme change'`), 1);
   const mail = await one(`SELECT body_text FROM dev_emails WHERE to_email = 'em-two@example.com' AND subject = 'Theme change'`);
-  assert.ok(mail.body_text.startsWith('Hi em-two parent,\n\nHello\n\nSee you Wednesday'));
+  assert.ok(mail.body_text.startsWith('Hi em-two,\n\nHello\n\nSee you Wednesday'), 'first name, then the message');
   const log = await one(`SELECT template, term_id, user_id FROM email_log WHERE dedupe_key = ?1`, `bulk:${batch}:${term.userId}`);
   assert.deepEqual(log, { template: 'bulk', term_id: term.termId, user_id: term.userId });
 });
@@ -178,7 +178,7 @@ test('preview shows the count and an escaped sample; send delivers once; the log
   assert.ok(html.includes('Subject: <strong>Picnic &lt;day&gt;</strong>'));
   assert.ok(html.includes('Bring a &lt;b&gt;hat&lt;/b&gt;.') && !html.includes('<b>hat</b>'));
   const [sample] = await audienceRecipients(env, { audience: 'term', termId: term.termId });
-  assert.ok(html.includes(`<p>Hi ${sample.parentName || 'there'},</p>`), 'greets the first recipient by name');
+  assert.ok(html.includes(`<p>Hi ${sample.parentName.split(' ')[0] || 'there'},</p>`), 'greets the first recipient by first name');
   assert.ok(html.includes(`To: ${sample.email}`));
   const batch = /name="batch" value="([^"]+)"/.exec(html)[1];
   assert.equal(await count(`SELECT COUNT(*) AS n FROM dev_emails WHERE subject = 'Picnic <day>'`), 0, 'a preview sends nothing');
@@ -195,6 +195,9 @@ test('preview shows the count and an escaped sample; send delivers once; the log
   const log = await route('GET', '/admin/email/log')(request('GET', `/admin/email/log?template=bulk&term=${term.termId}&q=EM-TWO`, { cookie: admin.cookie }), env, {});
   const logHtml = await log.text();
   assert.equal(log.status, 200);
+  for (const page of [composeBody, html, sent, logHtml]) {
+    assert.ok(!/\bundefined\b|\bnull\b|\[object /.test(page.replace(/<[^>]*>/g, ' ')), 'no rendering artefacts');
+  }
   assert.ok(logHtml.includes('em-two@example.com'));
   assert.ok(!logHtml.includes('em-held@example.com'), 'the address filter applies');
   assert.ok(logHtml.includes('Your message to families'));

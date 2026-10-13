@@ -51,6 +51,8 @@ test('reminder: date in the subject, Sydney time, venue, what to bring, account 
   assert.ok(String(m.html).includes(`<a href="${ACCOUNT}">`));
   assert.ok(m.text.startsWith('Hi Jo,'));
   assert.ok(reminder({ childName: 'Edie', className: 'X', startsAt: STARTS }).text.startsWith('Hi there,'));
+  assert.ok(reminder({ parentName: '  Priya   Sharma ', childName: 'Edie', className: 'X', startsAt: STARTS }).text.startsWith('Hi Priya,'),
+    'greets by first name');
 });
 
 test("possessives follow Australian style (James's)", () => {

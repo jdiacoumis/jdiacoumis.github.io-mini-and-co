@@ -57,9 +57,10 @@ function build(subject, blocks) {
   };
 }
 
+// First name only ("Hi Priya," rather than "Hi Priya Sharma,").
 function greeting(parentName) {
-  const name = String(parentName || '').trim();
-  return `Hi ${name || 'there'},`;
+  const first = String(parentName || '').trim().split(/\s+/)[0];
+  return `Hi ${first || 'there'},`;
 }
 
 // Australian style (Style Manual): 's on every singular name — "James's".

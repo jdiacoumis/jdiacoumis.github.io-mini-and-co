@@ -25,7 +25,7 @@ import {
 } from '../lib/validate.js';
 import { formatSydney, formatAge } from '../lib/time.js';
 import {
-  prepareBooking, createPendingBooking, expireBooking, termSessionsRemaining, formatAud, KIND_LABELS,
+  prepareBooking, createPendingBooking, expireBooking, termSessionsRemaining, formatAud,
 } from '../lib/domain.js';
 import { getPaymentsDriver } from '../lib/payments-driver.js';
 import { sendTemplate } from '../lib/notify.js';
@@ -423,7 +423,7 @@ function entryItem(e, position, user) {
       ${e.note ? html`<p class="waitlist-note">${e.note}</p>` : ''}
       ${offered ? html`
         <p class="waitlist-offer">Offered ${formatSydney(e.offered_at, 'date')}:
-          ${KIND_LABELS[e.offer_kind] || 'booking'} for ${formatAud(e.offer_amount_cents)} —
+          ${(OFFER_KIND_LABELS[e.offer_kind] || 'a booking').toLowerCase()} for ${formatAud(e.offer_amount_cents)} —
           held until <strong>${formatSydney(e.offer_expires_at)}</strong>.</p>
       ` : ''}
       <div class="waitlist-actions">${joinHtml(actions)}</div>
