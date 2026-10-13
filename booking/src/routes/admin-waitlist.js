@@ -18,7 +18,7 @@
 import { html, pageResponse, csrfField, joinHtml } from '../lib/html.js';
 import { requireAdmin, requireCsrf, parseForm } from '../lib/middleware.js';
 import { redirect, notFound } from '../lib/http.js';
-import { uuid, nowIso, isoFromMs } from '../lib/db.js';
+import { uuid, nowIso, isoFromMs, isConstraintError } from '../lib/db.js';
 import {
   isValidId, cleanText, normaliseEmail, isValidEmail, normalisePhone, isValidAuPhone, validateDob,
   parseDollarsToCents,
@@ -307,60 +307,81 @@ export async function addToWaitlist(env, {
   const tel = normalisePhone(phone);
   if (tel && !isValidAuPhone(tel)) return fail('invalid_phone');
 
-  let parent = await env.DB.prepare(`SELECT id FROM users WHERE email = ?1`).bind(address).first();
-  let createdParent = false;
-  if (!parent) {
-    const inserted = await env.DB.prepare(
-      `INSERT OR IGNORE INTO users (id, email, name, phone, role, created_at) VALUES (?1, ?2, ?3, ?4, 'parent', ?5)`,
-    ).bind(uuid(), address, cleanText(parentName, 100).replace(/\s+/g, ' '), tel, now).run();
-    createdParent = inserted.meta.changes > 0;
-    parent = await env.DB.prepare(`SELECT id FROM users WHERE email = ?1`).bind(address).first();
-  }
-
-  const findChild = () => env.DB.prepare(
-    `SELECT id, name FROM children WHERE user_id = ?1 AND lower(name) = lower(?2) AND archived_at IS NULL`,
-  ).bind(parent.id, name).first();
-  let child = await findChild();
-  let createdChild = false;
+  // Look up and validate everything first; then write in one atomic batch.
+  const parent = await env.DB.prepare(`SELECT id FROM users WHERE email = ?1`).bind(address).first();
+  const child = parent
+    ? await env.DB.prepare(
+      `SELECT id, name FROM children WHERE user_id = ?1 AND lower(name) = lower(?2) AND archived_at IS NULL
+       ORDER BY created_at LIMIT 1`,
+    ).bind(parent.id, name).first()
+    : null;
+  const dob = String(childDob || '').trim();
   if (!child) {
-    const dob = String(childDob || '').trim();
     if (!dob) return fail('dob_needed');
     const dobError = validateDob(dob);
     if (dobError) return fail('invalid_dob', dobError);
-    const inserted = await env.DB.prepare(
-      `INSERT INTO children (id, user_id, name, dob, medical_notes, photo_consent, created_at)
-       SELECT ?1, ?2, ?3, ?4, '', 0, ?5
-       WHERE NOT EXISTS (SELECT 1 FROM children WHERE user_id = ?2 AND lower(name) = lower(?3) AND archived_at IS NULL)`,
-    ).bind(uuid(), parent.id, name, dob, now).run();
-    createdChild = inserted.meta.changes > 0;
-    child = await findChild();
   }
-
   const cleanNote = cleanText(note, 500);
-  const existing = await env.DB.prepare(
-    `SELECT id, status FROM waitlist WHERE term_id = ?1 AND child_id = ?2`,
-  ).bind(term.id, child.id).first();
-  if (existing) {
-    if (existing.status !== 'declined' && existing.status !== 'removed') {
-      return fail('already_listed', `${child.name} is already on this waitlist (${ENTRY_STATUS_LABELS[existing.status].toLowerCase()}).`);
+
+  if (child) {
+    const existing = await env.DB.prepare(
+      `SELECT id, status FROM waitlist WHERE term_id = ?1 AND child_id = ?2`,
+    ).bind(term.id, child.id).first();
+    if (existing) {
+      if (existing.status !== 'declined' && existing.status !== 'removed') {
+        return fail('already_listed', `${child.name} is already on this waitlist (${ENTRY_STATUS_LABELS[existing.status].toLowerCase()}).`);
+      }
+      const rejoin = await env.DB.prepare(
+        `UPDATE waitlist SET status = 'waiting', joined_at = ?2, offered_at = NULL, offer_expires_at = NULL,
+                resolved_at = NULL, note = CASE WHEN ?3 = '' THEN note ELSE ?3 END
+         WHERE id = ?1 AND status IN ('declined', 'removed')`,
+      ).bind(existing.id, now, cleanNote).run();
+      if (rejoin.meta.changes === 0) return fail('already_listed', `${child.name} is already on this waitlist.`);
+      logEvent('waitlist_rejoined_by_admin', { entry_id: existing.id.slice(0, 8) });
+      return { ok: true, entryId: existing.id, rejoined: true, createdParent: false, createdChild: false };
     }
-    const rejoin = await env.DB.prepare(
-      `UPDATE waitlist SET status = 'waiting', joined_at = ?2, offered_at = NULL, offer_expires_at = NULL,
-              resolved_at = NULL, note = CASE WHEN ?3 = '' THEN note ELSE ?3 END
-       WHERE id = ?1 AND status IN ('declined', 'removed')`,
-    ).bind(existing.id, now, cleanNote).run();
-    if (rejoin.meta.changes === 0) return fail('already_listed', `${child.name} is already on this waitlist.`);
-    logEvent('waitlist_rejoined_by_admin', { entry_id: existing.id.slice(0, 8) });
-    return { ok: true, entryId: existing.id, rejoined: true, createdParent, createdChild };
   }
 
+  // Parent (if new), child (if new) and entry together. Rows are found by
+  // email and name inside the batch, so a family added twice at the same
+  // moment resolves to the same parent, child and one entry.
+  const statements = [];
+  if (!parent) {
+    statements.push(env.DB.prepare(
+      `INSERT OR IGNORE INTO users (id, email, name, phone, role, created_at) VALUES (?1, ?2, ?3, ?4, 'parent', ?5)`,
+    ).bind(uuid(), address, cleanText(parentName, 100).replace(/\s+/g, ' '), tel, now));
+  }
+  if (!child) {
+    statements.push(env.DB.prepare(
+      `INSERT INTO children (id, user_id, name, dob, medical_notes, photo_consent, created_at)
+       SELECT ?1, u.id, ?3, ?4, '', 0, ?5 FROM users u
+       WHERE u.email = ?2
+         AND NOT EXISTS (SELECT 1 FROM children c WHERE c.user_id = u.id AND lower(c.name) = lower(?3)
+                           AND c.archived_at IS NULL)`,
+    ).bind(uuid(), address, name, dob, now));
+  }
   const entryId = uuid();
-  const inserted = await env.DB.prepare(
+  statements.push(env.DB.prepare(
     `INSERT INTO waitlist (id, term_id, user_id, child_id, status, note, joined_at)
-     VALUES (?1, ?2, ?3, ?4, 'waiting', ?5, ?6)
+     SELECT ?1, ?2, u.id,
+            (SELECT c.id FROM children c WHERE c.user_id = u.id AND lower(c.name) = lower(?4) AND c.archived_at IS NULL
+             ORDER BY c.created_at LIMIT 1),
+            'waiting', ?5, ?6
+     FROM users u WHERE u.email = ?3
      ON CONFLICT(term_id, child_id) DO NOTHING`,
-  ).bind(entryId, term.id, parent.id, child.id, cleanNote, now).run();
-  if (inserted.meta.changes === 0) return fail('already_listed', `${child.name} is already on this waitlist.`);
+  ).bind(entryId, term.id, address, name, cleanNote, now));
+
+  let results;
+  try {
+    results = await env.DB.batch(statements);
+  } catch (err) {
+    if (!isConstraintError(err)) throw err;
+    logError('waitlist_add_failed', err, {});
+    return fail('add_failed', 'That family could not be added just now — please try again.');
+  }
+  if (results[results.length - 1].meta.changes === 0) return fail('already_listed', `${name} is already on this waitlist.`);
+  const createdParent = !parent && results[0].meta.changes > 0;
+  const createdChild = !child && results[parent ? 0 : 1].meta.changes > 0;
   logEvent('waitlist_added_by_admin', { entry_id: entryId.slice(0, 8), new_parent: createdParent, new_child: createdChild });
   return { ok: true, entryId, rejoined: false, createdParent, createdChild };
 }

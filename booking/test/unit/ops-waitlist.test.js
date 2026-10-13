@@ -175,8 +175,13 @@ test('adding a family by phone: new parent and child, existing child by name, re
   const existing = await addToWaitlist(env, { termId: fam.termId, email: 'wp@example.com', parentName: 'Changed', childName: 'child 0' });
   assert.deepEqual([existing.ok, existing.createdParent, existing.createdChild], [true, false, false]);
   assert.equal((await one(`SELECT name FROM users WHERE id = ?1`, fam.userId)).name, '');
+  const sibling = await addToWaitlist(env, { termId: fam.termId, email: 'wp@example.com', childName: 'Sprout', childDob: '2026-05-05' });
+  assert.deepEqual([sibling.ok, sibling.createdParent, sibling.createdChild], [true, false, true]);
+  assert.equal((await loadEntry(env, sibling.entryId)).user_id, fam.userId, 'a new child joins the existing family');
 
   assert.equal((await addToWaitlist(env, { termId: fam.termId, email: 'wp@example.com', childName: 'Newborn' })).error, 'dob_needed');
+  assert.equal((await addToWaitlist(env, { termId: fam.termId, email: 'ghost@example.com', childName: 'Kid', childDob: '2099-01-01' })).error, 'invalid_dob');
+  assert.equal(await count(`SELECT COUNT(*) AS n FROM users WHERE email = 'ghost@example.com'`), 0, 'nothing is written when validation fails');
   assert.equal((await addToWaitlist(env, { termId: fam.termId, email: 'wp@example.com', childName: 'Newborn', childDob: '2099-01-01' })).error, 'invalid_dob');
   assert.equal((await addToWaitlist(env, { termId: fam.termId, email: 'not-an-email', childName: 'X' })).error, 'invalid_email');
   assert.equal((await addToWaitlist(env, { termId: fam.termId, email: 'a@example.com', childName: '  ' })).error, 'invalid_child_name');
