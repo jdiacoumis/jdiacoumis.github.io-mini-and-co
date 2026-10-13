@@ -31,8 +31,15 @@ PAYMENTS_DRIVER = "stripe"
 PUBLIC_BASE_URL = "https://miniandcosensoryclasses.com"
 EMAIL_FROM = "Mini & Co. <bookings@miniandcosensoryclasses.com>"
 ADMIN_EMAILS = "miniandco.classes@gmail.com"
+# Facilitators: roster + attendance only. Comma-separated; re-checked on every request.
+STAFF_EMAILS = ""
 META_PIXEL_ID = "1991468878409217"
 WAIVER_VERSION = "2026-05-14"
+
+# Scheduled jobs (lib/cron.js): sweep lapsed holds, expire waitlist offers,
+# purge old records; Phase 2 adds reminders and nudges. Every 15 minutes.
+[triggers]
+crons = ["*/15 * * * *"]
 
 [observability.logs]
 enabled = true
