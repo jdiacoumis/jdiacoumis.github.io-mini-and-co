@@ -1,250 +1,913 @@
-// Domain-level booking logic: capacity-safe reservation, expiry handling,
-// confirmation workflow shared by the Stripe webhook, the mock payment
-// driver, and the admin mark-as-paid action.
+// Domain-level booking logic (designs D2, D3, D6), shared by the parent flow,
+// the admin portal, the payment webhooks and the scheduled jobs:
+//
+//   * THE definition of a held seat (holdsSeatSql / heldSeatsSql) — every
+//     count, guard, roster, list and grid uses it;
+//   * terms and their sessions, returning families, one trial per child;
+//   * prepareBooking(): pricing + every eligibility check, for a quote;
+//   * createPendingBooking(): capacity-guarded, atomic seat reservation that
+//     also redeems credits and counts the voucher use in the same batch;
+//   * confirmBooking(): the ONE confirmation path for every payment source,
+//     re-checking seats when the hold had lapsed (paid_no_seat otherwise);
+//   * cancelBooking / expireBooking / abandonCheckout / sweepExpiredBookings,
+//     which give credits and voucher uses back when a pending booking ends.
+//
+// D1 has no interactive transactions: every multi-statement write is one
+// env.DB.batch() (atomic), with txn_guards CHECK guards for conditional
+// rollback. Side effects that must happen exactly once on a status change are
+// conditioned on the booking's status at that point of the batch and placed
+// BEFORE the change itself.
+//
+// Rows are returned as database rows (snake_case) with computed fields added
+// in the same style (seats_held, seats_left, …).
 
-import { uuid, nowIso, isoPlusSeconds } from './db.js';
+import { uuid, nowIso, isoPlusSeconds, txnGuard, isConstraintError } from './db.js';
 import { logEvent, logError } from './log.js';
+import {
+  quoteTerm, quoteSessions, quoteTrial, finaliseQuote, planFor, instalmentSchedule,
+  normaliseVoucherCode, canBookTerm, applyCredits,
+} from './pricing.js';
+import {
+  paymentInsertStatement, recomputeStatement, creditAppliedStatement, availableCredits,
+  creditRedemptionStatements, reverseRedemptionStatements, voucherUseStatements,
+  voucherReleaseStatements, loadVoucher,
+} from './ledger.js';
+import { getPaymentsDriver } from './payments-driver.js';
 
-export const PENDING_BOOKING_EXPIRY_SECS = 35 * 60; // Stripe Checkout expires at 30 min
+// A parent's seats are held this long while they pay (Stripe Checkout itself
+// expires after 31 minutes — see payments-driver.js).
+export const PENDING_BOOKING_EXPIRY_SECS = 35 * 60;
 
-// Seats held against a session: confirmed bookings always, pending bookings
-// only while their payment hold has not lapsed. Used inline in guards below —
-// keep the two copies in sync.
-const HELD_SEATS_SQL = `
-  SELECT COUNT(*) FROM bookings b
-  JOIN booking_sessions bs ON bs.booking_id = b.id
-  WHERE bs.session_id = cs.id
-    AND (b.status = 'confirmed' OR (b.status = 'pending' AND b.expires_at > ?#NOW#))`;
+export const BOOKING_KINDS = ['term', 'casual', 'trial', 'complimentary'];
 
-// Load the sessions a parent is trying to book, with bookability flags.
-// Returns rows: { id, starts_at, duration_mins, price_cents, capacity,
-//                 class_name, venue, seats_held, bookable, reason }.
-export async function loadSessionsForBooking(env, sessionIds) {
-  if (!sessionIds.length) return [];
-  const now = nowIso();
-  const placeholders = sessionIds.map((_, i) => `?${i + 2}`).join(', ');
+export const KIND_LABELS = {
+  term: 'Term',
+  casual: 'Casual',
+  trial: 'Trial class',
+  complimentary: 'Complimentary',
+};
+
+export const PAYMENT_STATUS_LABELS = {
+  unpaid: 'Unpaid',
+  paid: 'Paid',
+  plan_active: 'Paying by instalments',
+  plan_overdue: 'Instalment overdue',
+  plan_complete: 'Instalments complete',
+  waived: 'Complimentary',
+};
+
+// bookings.needs_attention values, with owner-facing wording.
+export const NEEDS_ATTENTION_LABELS = {
+  paid_no_seat: 'Paid, but no seat was free',
+  paid_after_cancel: 'Paid after the booking was cancelled',
+  plan_overdue: 'Instalment overdue',
+  plan_ended_short: 'Instalment plan ended before the full amount was paid',
+  webhook_mismatch: "Payment doesn't match the booking",
+  credit_shortfall: 'Account credit was no longer available when the payment arrived',
+};
+
+export function formatAud(cents) {
+  const value = Number(cents || 0);
+  const sign = value < 0 ? '−' : '';
+  return `${sign}$${(Math.abs(value) / 100).toFixed(2)}`;
+}
+
+// --- The definition of a held seat -------------------------------------------
+
+// A LIVE booking: confirmed, or pending with an unexpired hold.
+export function bookingLiveSql(b, nowParam) {
+  return `(${b}.status = 'confirmed' OR (${b}.status = 'pending' AND ${b}.expires_at > ${nowParam}))`;
+}
+
+// A booking_sessions row HOLDS A SEAT when it is 'booked' and its booking is
+// live (schema comment on booking_sessions; design D2). This is the only
+// definition — everything below is built on it.
+export function holdsSeatSql(bs, b, nowParam) {
+  return `(${bs}.status = 'booked' AND ${bookingLiveSql(b, nowParam)})`;
+}
+
+// Seats held in a session: a scalar subquery. `sessionAlias` is a table alias
+// ("cs" → cs.id) or a bound parameter holding the session id ("?2").
+export function heldSeatsSql(sessionAlias, nowParam, { excludeBooking = null } = {}) {
+  const sessionId = sessionAlias.startsWith('?') ? sessionAlias : `${sessionAlias}.id`;
+  return `(SELECT COUNT(*) FROM booking_sessions hs JOIN bookings hb ON hb.id = hs.booking_id
+           WHERE hs.session_id = ${sessionId} AND ${holdsSeatSql('hs', 'hb', nowParam)}${
+             excludeBooking ? ` AND hb.id != ${excludeBooking}` : ''})`;
+}
+
+// Does this child already hold a seat in the session (through another booking)?
+function childInSessionSql(sessionIdExpr, childParam, nowParam, excludeBookingParam) {
+  return `EXISTS (SELECT 1 FROM booking_sessions cbs JOIN bookings cb ON cb.id = cbs.booking_id
+                  WHERE cbs.session_id = ${sessionIdExpr} AND cb.child_id = ${childParam}
+                    AND cb.id != ${excludeBookingParam} AND ${holdsSeatSql('cbs', 'cb', nowParam)})`;
+}
+
+// Does this child hold a live trial for the class (one trial per child per
+// class, D2)? The class comes from the trial's term or its session.
+function trialHeldSql(childParam, classParam, nowParam, excludeBookingParam = null) {
+  return `EXISTS (SELECT 1 FROM bookings tb
+                  WHERE tb.child_id = ${childParam} AND tb.kind = 'trial'
+                    ${excludeBookingParam ? `AND tb.id != ${excludeBookingParam}` : ''}
+                    AND ${bookingLiveSql('tb', nowParam)}
+                    AND (EXISTS (SELECT 1 FROM terms tt WHERE tt.id = tb.term_id AND tt.class_id = ${classParam})
+                         OR EXISTS (SELECT 1 FROM booking_sessions tbs
+                                    JOIN class_sessions tcs ON tcs.id = tbs.session_id
+                                    WHERE tbs.booking_id = tb.id AND tcs.class_id = ${classParam})))`;
+}
+
+function decorateSession(row, now) {
+  const seatsLeft = row.status === 'scheduled' ? Math.max(0, row.capacity - row.seats_held) : 0;
+  return { ...row, seats_left: seatsLeft, is_past: row.starts_at <= now };
+}
+
+// --- Sessions ----------------------------------------------------------------
+
+const SESSION_COLUMNS = `cs.id, cs.class_id, cs.term_id, cs.starts_at, cs.duration_mins, cs.capacity,
+  cs.casual_price_cents, cs.status, cs.cancelled_reason, cs.cancelled_at`;
+
+// Sessions a parent is trying to book, in the order asked, with bookability:
+// reason ∈ not_found | unavailable (cancelled / class inactive) | past | full.
+export async function loadSessionsForBooking(env, sessionIds, now = nowIso()) {
+  const ids = [...new Set(sessionIds)];
+  if (!ids.length) return [];
+  const placeholders = ids.map((_, i) => `?${i + 2}`).join(', ');
   const result = await env.DB.prepare(
-    `SELECT cs.id, cs.starts_at, cs.duration_mins, cs.price_cents, cs.capacity,
-            cs.status, c.active AS class_active, c.name AS class_name, c.venue,
-            (${HELD_SEATS_SQL.replace('?#NOW#', '?1')}) AS seats_held
+    `SELECT ${SESSION_COLUMNS}, c.active AS class_active, c.name AS class_name, c.venue,
+            t.name AS term_name, ${heldSeatsSql('cs', '?1')} AS seats_held
      FROM class_sessions cs
      JOIN classes c ON c.id = cs.class_id
+     LEFT JOIN terms t ON t.id = cs.term_id
      WHERE cs.id IN (${placeholders})`,
-  ).bind(now, ...sessionIds).all();
+  ).bind(now, ...ids).all();
 
   const byId = new Map((result.results || []).map((r) => [r.id, r]));
-  return sessionIds.map((id) => {
+  return ids.map((id) => {
     const row = byId.get(id);
     if (!row) return { id, bookable: false, reason: 'not_found' };
     let reason = null;
     if (row.status !== 'scheduled' || !row.class_active) reason = 'unavailable';
     else if (row.starts_at <= now) reason = 'past';
     else if (row.seats_held >= row.capacity) reason = 'full';
-    return { ...row, bookable: !reason, reason };
+    return { ...decorateSession(row, now), bookable: !reason, reason };
   });
 }
 
-// Sessions among `sessionIds` in which this child already holds a seat
-// (confirmed, or pending within its hold) — used to block double-booking the
-// same child into the same session.
-export async function sessionsAlreadyBookedForChild(env, childId, sessionIds) {
-  if (!sessionIds.length) return new Set();
-  const now = nowIso();
-  const placeholders = sessionIds.map((_, i) => `?${i + 3}`).join(', ');
+// Sessions among `sessionIds` in which this child already holds a seat.
+export async function sessionsAlreadyBookedForChild(env, childId, sessionIds, now = nowIso()) {
+  const ids = [...new Set(sessionIds)];
+  if (!ids.length) return new Set();
+  const placeholders = ids.map((_, i) => `?${i + 3}`).join(', ');
   const rows = await env.DB.prepare(
-    `SELECT DISTINCT bs.session_id FROM bookings b
-     JOIN booking_sessions bs ON bs.booking_id = b.id
-     WHERE b.child_id = ?1
-       AND bs.session_id IN (${placeholders})
-       AND (b.status = 'confirmed' OR (b.status = 'pending' AND b.expires_at > ?2))`,
-  ).bind(childId, now, ...sessionIds).all();
+    `SELECT DISTINCT bs.session_id FROM booking_sessions bs
+     JOIN bookings b ON b.id = bs.booking_id
+     WHERE b.child_id = ?1 AND bs.session_id IN (${placeholders})
+       AND ${holdsSeatSql('bs', 'b', '?2')}`,
+  ).bind(childId, now, ...ids).all();
   return new Set((rows.results || []).map((r) => r.session_id));
 }
 
-// Create a pending booking holding seats in one or more sessions, atomically.
+// Admin schedule: sessions with live fullness, optionally one class or term.
+export async function listSessionsWithFullness(env, {
+  upcomingOnly = true, classId = null, termId = null, now = nowIso(),
+} = {}) {
+  const rows = await env.DB.prepare(
+    `SELECT ${SESSION_COLUMNS}, c.name AS class_name, c.active AS class_active, t.name AS term_name,
+            ${heldSeatsSql('cs', '?1')} AS seats_held
+     FROM class_sessions cs
+     JOIN classes c ON c.id = cs.class_id
+     LEFT JOIN terms t ON t.id = cs.term_id
+     WHERE (?4 = 0 OR cs.starts_at > ?1)
+       AND (?2 IS NULL OR cs.class_id = ?2)
+       AND (?3 IS NULL OR cs.term_id = ?3)
+     ORDER BY cs.starts_at`,
+  ).bind(now, classId, termId, upcomingOnly ? 1 : 0).all();
+  return (rows.results || []).map((r) => decorateSession(r, now));
+}
+
+// --- Terms -------------------------------------------------------------------
+
+const TERM_SELECT = `
+  SELECT t.*, c.name AS class_name, c.description AS class_description, c.venue, c.age_range,
+         c.weekday, c.start_time, c.default_duration_mins, c.default_capacity, c.active AS class_active
+  FROM terms t JOIN classes c ON c.id = t.class_id`;
+
+// A term with its class details (or null).
+export async function loadTerm(env, termId) {
+  if (!termId) return null;
+  return env.DB.prepare(`${TERM_SELECT} WHERE t.id = ?1`).bind(termId).first();
+}
+
+// Every session of a term (any status), in date order, with seats.
+export async function listTermSessions(env, termId, { now = nowIso() } = {}) {
+  const rows = await env.DB.prepare(
+    `SELECT ${SESSION_COLUMNS}, ${heldSeatsSql('cs', '?2')} AS seats_held
+     FROM class_sessions cs WHERE cs.term_id = ?1 ORDER BY cs.starts_at`,
+  ).bind(termId, now).all();
+  return (rows.results || []).map((r) => decorateSession(r, now));
+}
+
+// The term's scheduled sessions that have not started, and how many scheduled
+// sessions it has in total (the pro-rata denominator, D3).
+export async function termSessionsRemaining(env, termId, now = nowIso()) {
+  const sessions = await listTermSessions(env, termId, { now });
+  const scheduled = sessions.filter((s) => s.status === 'scheduled');
+  return {
+    sessions,
+    remaining: scheduled.filter((s) => s.starts_at > now),
+    totalScheduled: scheduled.length,
+  };
+}
+
+// Open terms of active classes that still have a session to come, each with
+// its sessions (seats per session), total_scheduled, remaining (scheduled and
+// upcoming) and term_seats_left (the fewest seats left across remaining
+// sessions — a term booking needs a seat in every one).
+export async function listOpenTerms(env, { now = nowIso() } = {}) {
+  const filter = `t.status = 'open' AND c.active = 1
+    AND EXISTS (SELECT 1 FROM class_sessions s
+                WHERE s.term_id = t.id AND s.status = 'scheduled' AND s.starts_at > ?1)`;
+  const terms = (await env.DB.prepare(
+    `${TERM_SELECT} WHERE ${filter} ORDER BY t.starts_on, c.start_time, c.name`,
+  ).bind(now).all()).results || [];
+  if (!terms.length) return [];
+
+  const sessions = (await env.DB.prepare(
+    `SELECT ${SESSION_COLUMNS}, ${heldSeatsSql('cs', '?1')} AS seats_held
+     FROM class_sessions cs
+     WHERE cs.term_id IN (SELECT t.id FROM terms t JOIN classes c ON c.id = t.class_id WHERE ${filter})
+     ORDER BY cs.starts_at`,
+  ).bind(now).all()).results || [];
+
+  const byTerm = new Map(terms.map((t) => [t.id, []]));
+  for (const s of sessions) byTerm.get(s.term_id)?.push(decorateSession(s, now));
+  return terms.map((term) => {
+    const all = byTerm.get(term.id) || [];
+    const scheduled = all.filter((s) => s.status === 'scheduled');
+    const remaining = scheduled.filter((s) => s.starts_at > now);
+    return {
+      ...term,
+      sessions: all,
+      total_scheduled: scheduled.length,
+      remaining,
+      term_seats_left: remaining.length ? Math.min(...remaining.map((s) => s.seats_left)) : 0,
+    };
+  });
+}
+
+// Upcoming scheduled one-off sessions (no term) of active classes.
+export async function listOneOffSessions(env, { now = nowIso() } = {}) {
+  const rows = await env.DB.prepare(
+    `SELECT ${SESSION_COLUMNS}, c.name AS class_name, c.venue, c.age_range,
+            c.description AS class_description, ${heldSeatsSql('cs', '?1')} AS seats_held
+     FROM class_sessions cs JOIN classes c ON c.id = cs.class_id
+     WHERE cs.term_id IS NULL AND cs.status = 'scheduled' AND c.active = 1 AND cs.starts_at > ?1
+     ORDER BY c.name, cs.starts_at`,
+  ).bind(now).all();
+  return (rows.results || []).map((r) => decorateSession(r, now));
+}
+
+// A returning family holds a confirmed term booking (any child of the
+// account) in the term's previous term (D3).
+export async function isReturningFamily(env, userId, termId) {
+  const row = await env.DB.prepare(
+    `SELECT 1 AS yes FROM terms t
+     JOIN bookings b ON b.term_id = t.previous_term_id
+     WHERE t.id = ?2 AND b.user_id = ?1 AND b.kind = 'term' AND b.status = 'confirmed'
+     LIMIT 1`,
+  ).bind(userId, termId).first();
+  return Boolean(row);
+}
+
+// Has this child already got a live trial for this class?
+export async function childHasTrial(env, childId, classId, now = nowIso()) {
+  const row = await env.DB.prepare(
+    `SELECT ${trialHeldSql('?1', '?2', '?3')} AS held`,
+  ).bind(childId, classId, now).first();
+  return Boolean(row && row.held);
+}
+
+// --- Preparing a booking (quote + checks) ------------------------------------
+
+function fail(error, extra = {}) {
+  return { ok: false, error, ...extra };
+}
+
+// Everything a checkout (parent or admin) needs before reserving seats:
+// which sessions, the price (D3: term / pro-rata / returning / casual / trial,
+// voucher, credits, optional instalment plan) and every eligibility rule.
 //
-// D1 has no interactive transactions; a batch() is atomic and rolls back
-// entirely if any statement errors. Each per-session insert is guarded by the
-// live seat count, and the final txn_guards insert computes 'ok' only when
-// every requested seat was actually taken — any other value violates the
-// table's CHECK constraint and aborts (rolls back) the whole batch. This is
-// what makes two parents racing for the last seat resolve to exactly one
-// reservation (booking-flow spec: Capacity-Guarded Seat Reservation).
-export async function createPendingBooking(env, {
-  userId, childId, sessionIds, waiverVersion, photoConsent, medicalNotes,
+//   kind: term | casual | trial | complimentary
+//   termId: required for term; for casual/trial the chosen sessions must
+//           belong to it (one-off sessions: omit termId)
+//   sessionIds: casual (chosen), trial (exactly one), complimentary (chosen,
+//               or omit to cover the term's remaining sessions)
+//   paymentChoice: 'full' | 'plan'
+//   admin: true for owner-made bookings — skips opening times and term status
+//          (auto-enrol targets draft terms) and allows complimentary
+//   priceOverrideCents: admin price override (replaces the list price)
+//
+// Returns { ok: true, kind, term, sessions, quote, warnings } where quote =
+//   { kind, sessionIds, weeks, totalWeeks, listCents, isProRata, isReturning,
+//     discountCents, voucherCode, voucherError, creditCents, allocations,
+//     amountCents, planOption: {n, interval} | null,
+//     plan: {n, interval, eachCents, firstCents, schedule} | null }
+// or { ok: false, error, … } with error ∈ invalid_kind | not_found | closed |
+//   not_open_yet (opensAt) | finished | no_sessions | trial_one_session |
+//   trial_used | unavailable | full (sessions) | already_booked (sessions) |
+//   plan_unavailable. An invalid voucher is NOT an error here: quote.voucherError
+//   says why, and the caller decides.
+export async function prepareBooking(env, {
+  userId, childId, kind, termId = null, sessionIds = [], voucherCode = '',
+  paymentChoice = 'full', now = nowIso(), admin = false, priceOverrideCents = null,
 }) {
-  const unique = [...new Set(sessionIds)];
-  const sessions = await loadSessionsForBooking(env, unique);
-  const unavailable = sessions.filter((s) => !s.bookable);
-  if (unavailable.length) {
-    return { error: 'unavailable', sessions: unavailable };
+  if (!BOOKING_KINDS.includes(kind) || (kind === 'complimentary' && !admin)) return fail('invalid_kind');
+
+  // Lapsed holds of this account give their seats, credits and voucher uses
+  // back before anything is counted.
+  await sweepExpiredBookings(env, { now, userId });
+
+  const term = termId ? await loadTerm(env, termId) : null;
+  if (termId && !term) return fail('not_found');
+  const returning = term ? await isReturningFamily(env, userId, term.id) : false;
+  const warnings = [];
+  let base;
+  let sessions;
+
+  if (kind === 'term' || (kind === 'complimentary' && !sessionIds.length)) {
+    if (!term) return fail('not_found');
+    const all = await listTermSessions(env, term.id, { now });
+    const held = await sessionsAlreadyBookedForChild(env, childId, all.map((s) => s.id), now);
+    base = quoteTerm({
+      term, sessions: all, now, returning, excludeSessionIds: [...held], ignoreOpening: admin,
+    });
+    if (!base.ok) return fail(base.reason, { opensAt: base.opensAt || null });
+    if (held.size) warnings.push('child_already_holds_some_weeks');
+    sessions = await loadSessionsForBooking(env, base.sessionIds, now);
+  } else {
+    const ids = [...new Set(sessionIds)];
+    if (!ids.length) return fail('no_sessions');
+    if (kind === 'trial' && ids.length !== 1) return fail('trial_one_session');
+    sessions = await loadSessionsForBooking(env, ids, now);
+    if (sessions.some((s) => s.reason === 'not_found')) return fail('not_found');
+    const termIds = new Set(sessions.map((s) => s.term_id || null));
+    if (termIds.size > 1 || (term && !termIds.has(term.id)) || (!term && !termIds.has(null))) {
+      return fail('not_found');
+    }
+    if (term && !admin) {
+      const access = canBookTerm({ term, now, returning });
+      if (!access.open) return fail(access.reason, { opensAt: access.opensAt || null });
+    }
+    if (kind === 'trial' && await childHasTrial(env, childId, sessions[0].class_id, now)) {
+      return fail('trial_used');
+    }
+    base = kind === 'trial' ? quoteTrial({ term, session: sessions[0] }) : quoteSessions({ sessions });
   }
 
-  // A child may hold at most one seat per session: a clear error here, and a
-  // matching race-proof clause inside the guarded insert below.
-  const duplicates = await sessionsAlreadyBookedForChild(env, childId, unique);
+  const unavailable = sessions.filter((s) => !s.bookable);
+  if (unavailable.length) {
+    return fail(unavailable.some((s) => s.reason === 'full') ? 'full' : 'unavailable', { sessions: unavailable });
+  }
+  const duplicates = await sessionsAlreadyBookedForChild(env, childId, sessions.map((s) => s.id), now);
+  if (duplicates.size) {
+    return fail('already_booked', { sessions: sessions.filter((s) => duplicates.has(s.id)) });
+  }
+
+  if (kind === 'complimentary') base = { ...base, kind: 'complimentary', listCents: 0 };
+  if (priceOverrideCents !== null && priceOverrideCents !== undefined) {
+    base = { ...base, listCents: priceOverrideCents, priceOverridden: true };
+  }
+
+  const code = kind === 'complimentary' ? '' : normaliseVoucherCode(voucherCode);
+  const voucher = code ? await loadVoucher(env, code) : null;
+  const credits = kind === 'complimentary' ? [] : await availableCredits(env, userId, childId, now);
+  const quote = finaliseQuote(base, { voucher, voucherCode: code, credits, now });
+
+  const planOption = kind === 'term' ? planFor(term, quote.weeks, quote.amountCents) : null;
+  let plan = null;
+  if (paymentChoice === 'plan') {
+    if (!planOption || quote.amountCents <= 0) return fail('plan_unavailable');
+    const schedule = instalmentSchedule(quote.amountCents, planOption.n, planOption.interval, now);
+    plan = { ...planOption, eachCents: schedule.eachCents, firstCents: schedule.firstCents, schedule };
+  }
+
+  return { ok: true, kind, term, sessions, quote: { ...quote, planOption, plan }, warnings };
+}
+
+// --- Reserving seats ---------------------------------------------------------
+
+// Create a pending booking holding seats in one or more sessions, atomically.
+//
+// One batch: the booking row; a guarded insert per session (scheduled, class
+// active, not started, a free seat by the held-seat definition, child not
+// already in it); a count guard that rolls everything back unless EVERY seat
+// was taken; the one-trial-per-class guard; the voucher use (within its
+// limits); and the credit redemptions. Two parents racing for the last seat
+// resolve to exactly one booking.
+//
+// `quote` comes from prepareBooking (listCents, discountCents, voucherCode,
+// creditCents, allocations, amountCents, plan). `expiresAt` defaults to now +
+// 35 minutes (pay-later holds pass their own). `paymentMethod` defaults from
+// the quote: plan | none (nothing to pay) | full.
+//
+// Returns { id, expiresAt, amountCents, sessions } or { error, sessions? } with
+// error ∈ no_sessions | unavailable | already_booked | trial_one_session |
+// trial_used | capacity | voucher_invalid | credit_changed.
+export async function createPendingBooking(env, {
+  userId, childId, kind, termId = null, sessionIds, quote, waiverVersion = null,
+  photoConsent = null, medicalNotes = null, expiresAt = null, paymentMethod = null, now = nowIso(),
+}) {
+  if (!BOOKING_KINDS.includes(kind)) throw new Error(`Unknown booking kind: ${kind}`);
+  const unique = [...new Set(sessionIds || [])];
+  if (!unique.length) return { error: 'no_sessions' };
+  const listCents = quote.listCents ?? 0;
+  const discountCents = quote.discountCents ?? 0;
+  const creditCents = quote.creditCents ?? 0;
+  const amountCents = quote.amountCents ?? 0;
+  if (![listCents, discountCents, creditCents, amountCents].every((v) => Number.isInteger(v) && v >= 0)
+    || listCents - discountCents - creditCents !== amountCents) {
+    throw new Error('createPendingBooking: inconsistent quote');
+  }
+
+  const sessions = await loadSessionsForBooking(env, unique, now);
+  const unavailable = sessions.filter((s) => !s.bookable);
+  if (unavailable.length) return { error: 'unavailable', sessions: unavailable };
+  const duplicates = await sessionsAlreadyBookedForChild(env, childId, unique, now);
   if (duplicates.size) {
     return {
       error: 'already_booked',
       sessions: sessions.filter((s) => duplicates.has(s.id)).map((s) => ({ ...s, reason: 'already_booked' })),
     };
   }
+  let trialClassId = null;
+  if (kind === 'trial') {
+    if (unique.length !== 1) return { error: 'trial_one_session' };
+    trialClassId = sessions[0].class_id;
+    if (await childHasTrial(env, childId, trialClassId, now)) return { error: 'trial_used' };
+  }
 
   const bookingId = uuid();
-  const now = nowIso();
-  const expiresAt = isoPlusSeconds(PENDING_BOOKING_EXPIRY_SECS);
-  const amountCents = sessions.reduce((sum, s) => sum + s.price_cents, 0);
+  const hold = expiresAt || isoPlusSeconds(PENDING_BOOKING_EXPIRY_SECS, Date.parse(now));
+  const plan = quote.plan || null;
+  const method = paymentMethod || (plan ? 'plan' : amountCents === 0 ? 'none' : 'full');
+  const allocations = quote.allocations || [];
 
   const statements = [
     env.DB.prepare(
       `INSERT INTO bookings
-         (id, user_id, child_id, status, amount_cents, currency,
-          waiver_version, waiver_accepted_at, photo_consent_snapshot,
-          medical_notes_snapshot, created_at, expires_at)
-       VALUES (?1, ?2, ?3, 'pending', ?4, 'AUD', ?5, ?6, ?7, ?8, ?6, ?9)`,
-    ).bind(bookingId, userId, childId, amountCents, waiverVersion, now,
-      photoConsent ? 1 : 0, medicalNotes, expiresAt),
+         (id, user_id, child_id, kind, term_id, status, list_amount_cents, discount_cents, voucher_code,
+          credit_cents, amount_cents, currency, payment_method, payment_status,
+          plan_instalments, plan_instalment_cents, plan_interval,
+          waiver_version, waiver_accepted_at, photo_consent_snapshot, medical_notes_snapshot,
+          created_at, expires_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7, ?8, ?9, ?10, 'AUD', ?11, ?12, ?13, ?14, ?15,
+               ?16, ?17, ?18, ?19, ?20, ?21)`,
+    ).bind(
+      bookingId, userId, childId, kind, termId, listCents, discountCents, quote.voucherCode || null,
+      creditCents, amountCents, method, kind === 'complimentary' ? 'waived' : 'unpaid',
+      plan ? plan.n : null, plan ? plan.eachCents : null, plan ? plan.interval : null,
+      waiverVersion, waiverVersion ? now : null,
+      photoConsent === null || photoConsent === undefined ? null : (photoConsent ? 1 : 0),
+      medicalNotes, now, hold,
+    ),
 
     ...unique.map((sessionId) => env.DB.prepare(
-      `INSERT INTO booking_sessions (booking_id, session_id)
-       SELECT ?1, cs.id FROM class_sessions cs
+      `INSERT INTO booking_sessions (booking_id, session_id, status)
+       SELECT ?1, cs.id, 'booked' FROM class_sessions cs
        JOIN classes c ON c.id = cs.class_id
-       WHERE cs.id = ?2 AND cs.status = 'scheduled' AND c.active = 1
-         AND cs.starts_at > ?3
-         AND cs.capacity > (${HELD_SEATS_SQL.replace('?#NOW#', '?3')})
-         AND NOT EXISTS (
-           SELECT 1 FROM bookings b2
-           JOIN booking_sessions bs2 ON bs2.booking_id = b2.id
-           WHERE bs2.session_id = cs.id AND b2.child_id = ?4 AND b2.id != ?1
-             AND (b2.status = 'confirmed' OR (b2.status = 'pending' AND b2.expires_at > ?3)))`,
+       WHERE cs.id = ?2 AND cs.status = 'scheduled' AND c.active = 1 AND cs.starts_at > ?3
+         AND cs.capacity > ${heldSeatsSql('cs', '?3')}
+         AND NOT ${childInSessionSql('cs.id', '?4', '?3', '?1')}`,
     ).bind(bookingId, sessionId, now, childId)),
 
-    env.DB.prepare(
-      `INSERT INTO txn_guards (id)
-       SELECT CASE WHEN (SELECT COUNT(*) FROM booking_sessions WHERE booking_id = ?1) = ?2
-              THEN 'ok' ELSE 'capacity' END`,
-    ).bind(bookingId, unique.length),
+    ...txnGuard(env, `(SELECT COUNT(*) FROM booking_sessions WHERE booking_id = ?1) = ?2`,
+      [bookingId, unique.length], 'capacity'),
 
-    env.DB.prepare(`DELETE FROM txn_guards WHERE id = 'ok'`),
+    ...(kind === 'trial'
+      ? txnGuard(env, `NOT ${trialHeldSql('?1', '?2', '?3', '?4')}`,
+        [childId, trialClassId, now, bookingId], 'trial')
+      : []),
+
+    ...(quote.voucherCode ? voucherUseStatements(env, quote.voucherCode, { now }) : []),
+
+    ...creditRedemptionStatements(env, { bookingId, userId, childId, allocations, now }),
   ];
 
   try {
     await env.DB.batch(statements);
   } catch (err) {
-    // CHECK violation on txn_guards: a seat was lost between page load and
-    // submit — either to a concurrent booking (full) or to a concurrent
-    // duplicate for the same child. Diagnose which for the message.
-    const after = await loadSessionsForBooking(env, unique);
-    const dupAfter = await sessionsAlreadyBookedForChild(env, childId, unique);
+    if (!isConstraintError(err)) throw err;
+    // A guard rolled the batch back. Diagnose for the parent-facing message.
+    const after = await loadSessionsForBooking(env, unique, now);
+    const dupAfter = await sessionsAlreadyBookedForChild(env, childId, unique, now);
     const lost = after
       .map((s) => (dupAfter.has(s.id) ? { ...s, bookable: false, reason: 'already_booked' } : s))
       .filter((s) => !s.bookable);
-    logEvent('booking_capacity_conflict', { user_id: userId.slice(0, 8) });
-    return { error: 'capacity', sessions: lost.length ? lost : after };
+    logEvent('booking_guard_rejected', { user_id: String(userId).slice(0, 8), lost: lost.length });
+    if (lost.length) return { error: 'capacity', sessions: lost };
+    if (kind === 'trial' && await childHasTrial(env, childId, trialClassId, now)) return { error: 'trial_used' };
+    if (quote.voucherCode) {
+      const voucher = await loadVoucher(env, quote.voucherCode);
+      if (!voucher || !voucher.active || (voucher.max_uses !== null && voucher.uses >= voucher.max_uses)) {
+        return { error: 'voucher_invalid' };
+      }
+    }
+    if (allocations.length) return { error: 'credit_changed' };
+    return { error: 'capacity', sessions: after };
   }
 
   logEvent('pending_booking_created', {
-    booking_id: bookingId.slice(0, 8),
-    sessions: unique.length,
-    amount_cents: amountCents,
+    booking_id: bookingId.slice(0, 8), kind, sessions: unique.length, amount_cents: amountCents,
   });
-  return { id: bookingId, expiresAt, amountCents, sessions };
+  return { id: bookingId, expiresAt: hold, amountCents, sessions };
 }
 
-// Record the payment handle on a freshly created pending booking.
+// Record the hosted-checkout handle on a pending booking.
 export async function attachPaymentRef(env, bookingId, provider, paymentRef) {
   await env.DB.prepare(
     `UPDATE bookings SET payment_provider = ?2, payment_ref = ?3 WHERE id = ?1`,
   ).bind(bookingId, provider, paymentRef).run();
 }
 
-// Confirm a booking: mark as confirmed and store payment details. Idempotent —
-// a second confirmation for an already-confirmed booking leaves the original
-// payment record untouched. Cancelled/expired bookings are never confirmed by
-// this path (admin "check payment" decides those cases explicitly).
-export async function confirmBooking(env, bookingId, { paymentProvider, paymentRef = null, paymentIntent = null, amountCents = null }) {
-  const now = nowIso();
+// --- Confirming --------------------------------------------------------------
 
-  const booking = await env.DB.prepare(
-    `SELECT user_id, child_id, status FROM bookings WHERE id = ?1`,
-  ).bind(bookingId).first();
-  if (!booking) return { error: 'not_found' };
-
-  if (booking.status === 'confirmed') {
-    logEvent('confirm_booking_idempotent', { booking_id: bookingId.slice(0, 8) });
-    return { success: true, alreadyConfirmed: true };
-  }
-  if (booking.status === 'cancelled') return { error: 'cancelled' };
-
-  // 'pending' or 'expired' (payment can land after the hold lapsed — the
-  // money is real, so the booking is honoured).
-  const result = await env.DB.prepare(
-    `UPDATE bookings
-     SET status = 'confirmed',
-         payment_provider = ?2,
-         payment_ref = COALESCE(?3, payment_ref),
-         payment_intent = COALESCE(?4, payment_intent),
-         paid_at = ?5,
-         amount_cents = COALESCE(?6, amount_cents)
-     WHERE id = ?1 AND status IN ('pending', 'expired')`,
-  ).bind(bookingId, paymentProvider, paymentRef, paymentIntent, now, amountCents).run();
-
-  if (result.meta.changes === 0) {
-    return { error: 'state_changed' };
-  }
-
-  logEvent('booking_confirmed', {
-    booking_id: bookingId.slice(0, 8),
-    provider: paymentProvider,
-  });
-  return { success: true };
+export function flagStatement(env, bookingId, flag, { overwrite = true } = {}) {
+  if (!Object.hasOwn(NEEDS_ATTENTION_LABELS, flag)) throw new Error(`Unknown attention flag: ${flag}`);
+  return env.DB.prepare(
+    overwrite
+      ? `UPDATE bookings SET needs_attention = ?2 WHERE id = ?1`
+      : `UPDATE bookings SET needs_attention = COALESCE(needs_attention, ?2) WHERE id = ?1`,
+  ).bind(bookingId, flag);
 }
 
-// A booking with its child and sessions, visible ONLY to the owning account.
-// Missing and not-owned ids return the same null (no cross-account disclosure,
-// CWE-639 / API1 BOLA).
-export async function getOwnedBooking(env, bookingId, userId) {
-  const booking = await env.DB.prepare(
-    `SELECT b.id, b.status, b.amount_cents, b.currency, b.paid_at, b.created_at,
-            b.expires_at, b.payment_provider, b.waiver_version,
-            b.photo_consent_snapshot, c.name AS child_name
-     FROM bookings b
-     JOIN children c ON c.id = b.child_id
-     WHERE b.id = ?1 AND b.user_id = ?2`,
-  ).bind(bookingId, userId).first();
-  if (!booking) return null;
+export async function flagBooking(env, bookingId, flag, options = {}) {
+  await flagStatement(env, bookingId, flag, options).run();
+  logEvent('booking_flagged', { booking_id: bookingId.slice(0, 8), flag });
+}
 
-  const sessions = await env.DB.prepare(
-    `SELECT cs.id, cs.starts_at, cs.duration_mins, cs.price_cents, cl.name AS class_name, cl.venue
+function waitlistBookedStatement(env, bookingId, now) {
+  return env.DB.prepare(
+    `UPDATE waitlist SET status = 'booked', resolved_at = ?2
+     WHERE offer_booking_id = ?1 AND status IN ('offered', 'waiting')`,
+  ).bind(bookingId, now);
+}
+
+function expiryStatements(env, bookingId) {
+  return [
+    ...reverseRedemptionStatements(env, bookingId, { whenStatusIn: ['pending'] }),
+    ...voucherReleaseStatements(env, bookingId, { whenStatusIn: ['pending'] }),
+    env.DB.prepare(`UPDATE bookings SET status = 'expired' WHERE id = ?1 AND status = 'pending'`).bind(bookingId),
+  ];
+}
+
+// Would any of this booking's seats be refused right now? (capacity excluding
+// the booking itself, or the child already in that session elsewhere)
+async function seatConflict(env, booking, now) {
+  const row = await env.DB.prepare(
+    `SELECT COUNT(*) AS conflicts FROM booking_sessions bs
+     JOIN class_sessions cs ON cs.id = bs.session_id
+     WHERE bs.booking_id = ?1 AND bs.status = 'booked' AND cs.status = 'scheduled' AND cs.starts_at > ?2
+       AND (cs.capacity <= ${heldSeatsSql('cs', '?2', { excludeBooking: '?1' })}
+            OR ${childInSessionSql('cs.id', '?3', '?2', '?1')})`,
+  ).bind(booking.id, now, booking.child_id).first();
+  return row.conflicts > 0;
+}
+
+// Confirm a booking because money (or nothing-owed) says so. The ONE path for
+// the Stripe webhook, the mock checkout, zero-total checkouts, offline
+// payments and "Check with Stripe" (D6). Idempotent.
+//
+//   payment: optional ledger row { kind, amountCents, provider, providerRef,
+//            method, note, recordedBy, paidAt } recorded in the same batch.
+//
+//   * confirmed → records the payment (if new) and recomputes.
+//   * cancelled → records the payment, flags paid_after_cancel.
+//   * pending with a live hold → confirmed.
+//   * expired, or pending past its hold → every seat is re-taken under the
+//     same guards as a new booking (capacity excluding this booking; child
+//     not already in the session; started/cancelled sessions are not
+//     re-checked). Success → confirmed (credit and voucher uses re-taken).
+//     Failure → the payment is still recorded, the booking stays expired and
+//     is flagged paid_no_seat; nothing is sold twice.
+//
+// Returns { ok: true, status: 'confirmed', newlyConfirmed, reconfirmed,
+//           creditShortfall } or { ok: false, error, flagged? } with
+// error ∈ not_found | cancelled | paid_no_seat.
+export async function confirmBooking(env, bookingId, options = {}) {
+  let skipCredits = false;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const outcome = await attemptConfirm(env, bookingId, { ...options, skipCredits });
+    if (!outcome.retry) return outcome;
+    if (outcome.retry === 'credit') skipCredits = true;
+  }
+  throw new Error('confirmBooking: booking state kept changing');
+}
+
+async function attemptConfirm(env, bookingId, {
+  provider = null, paymentRef = null, paymentIntent = null, subscriptionId = null,
+  payment = null, now = nowIso(), skipCredits = false,
+}) {
+  const booking = await env.DB.prepare(
+    `SELECT id, user_id, child_id, kind, status, expires_at, credit_cents, voucher_code
+     FROM bookings WHERE id = ?1`,
+  ).bind(bookingId).first();
+  if (!booking) return { ok: false, error: 'not_found' };
+
+  const ledger = payment ? [paymentInsertStatement(env, { ...payment, bookingId, now })] : [];
+  const refs = env.DB.prepare(
+    `UPDATE bookings SET payment_provider = COALESCE(?2, payment_provider),
+            payment_ref = COALESCE(?3, payment_ref), payment_intent = COALESCE(?4, payment_intent),
+            stripe_subscription_id = COALESCE(?5, stripe_subscription_id)
+     WHERE id = ?1`,
+  ).bind(bookingId, provider, paymentRef, paymentIntent, subscriptionId);
+  const recompute = recomputeStatement(env, bookingId);
+
+  if (booking.status === 'confirmed') {
+    await env.DB.batch([refs, creditAppliedStatement(env, bookingId, now), ...ledger, recompute]);
+    return { ok: true, status: 'confirmed', newlyConfirmed: false, reconfirmed: false, creditShortfall: false };
+  }
+
+  if (booking.status === 'cancelled') {
+    if (!payment) return { ok: false, error: 'cancelled' };
+    await env.DB.batch([refs, ...ledger, flagStatement(env, bookingId, 'paid_after_cancel'), recompute]);
+    logEvent('payment_after_cancel', { booking_id: bookingId.slice(0, 8) });
+    return { ok: false, error: 'cancelled', flagged: 'paid_after_cancel' };
+  }
+
+  const holdLive = booking.status === 'pending' && Boolean(booking.expires_at) && booking.expires_at > now;
+  const flip = env.DB.prepare(
+    `UPDATE bookings SET status = 'confirmed', payment_provider = COALESCE(?2, payment_provider),
+            payment_ref = COALESCE(?3, payment_ref), payment_intent = COALESCE(?4, payment_intent),
+            stripe_subscription_id = COALESCE(?5, stripe_subscription_id)
+     WHERE id = ?1 AND status IN ('pending', 'expired')`,
+  ).bind(bookingId, provider, paymentRef, paymentIntent, subscriptionId);
+  const after = [
+    ...txnGuard(env, `(SELECT status FROM bookings WHERE id = ?1) = 'confirmed'`, [bookingId], 'state'),
+    waitlistBookedStatement(env, bookingId, now),
+    creditAppliedStatement(env, bookingId, now),
+    ...ledger,
+    recompute,
+  ];
+
+  let before = [];
+  let creditShortfall = false;
+  if (!holdLive) {
+    // D6: the hold lapsed before the payment landed — re-take every seat.
+    const notYet = `(SELECT status FROM bookings WHERE id = ?1) IN ('pending', 'expired')`;
+    const rows = (await env.DB.prepare(
+      `SELECT bs.session_id FROM booking_sessions bs JOIN class_sessions cs ON cs.id = bs.session_id
+       WHERE bs.booking_id = ?1 AND bs.status = 'booked' AND cs.status = 'scheduled' AND cs.starts_at > ?2`,
+    ).bind(bookingId, now).all()).results || [];
+    for (const row of rows) {
+      before.push(...txnGuard(env,
+        `NOT ${notYet}
+         OR ((SELECT capacity FROM class_sessions WHERE id = ?2) > ${heldSeatsSql('?2', '?3', { excludeBooking: '?1' })}
+             AND NOT ${childInSessionSql('?2', '?4', '?3', '?1')})`,
+        [bookingId, row.session_id, now, booking.child_id], 'seat'));
+    }
+    // An expired booking gave its credit and voucher use back; take them again.
+    if (booking.credit_cents > 0 && booking.status === 'expired') {
+      let creditCents = 0;
+      if (!skipCredits) {
+        const credits = await availableCredits(env, booking.user_id, booking.child_id, now);
+        const applied = applyCredits(credits, booking.credit_cents);
+        creditCents = applied.creditCents;
+        before.push(...creditRedemptionStatements(env, {
+          bookingId, userId: booking.user_id, childId: booking.child_id,
+          allocations: applied.allocations, now, whenStatusIn: ['expired'],
+        }));
+      }
+      creditShortfall = creditCents < booking.credit_cents;
+    }
+    if (booking.voucher_code) {
+      before.push(...voucherUseStatements(env, booking.voucher_code, {
+        bookingId, now, whenStatusIn: ['expired'], enforceLimits: false,
+      }));
+    }
+    if (creditShortfall) after.push(flagStatement(env, bookingId, 'credit_shortfall', { overwrite: false }));
+  }
+
+  const statements = [...before, flip, ...after];
+  try {
+    const results = await env.DB.batch(statements);
+    const newlyConfirmed = results[before.length].meta.changes > 0;
+    if (newlyConfirmed) {
+      logEvent('booking_confirmed', {
+        booking_id: bookingId.slice(0, 8), provider: provider || 'none', reconfirmed: !holdLive,
+      });
+    }
+    return {
+      ok: true, status: 'confirmed', newlyConfirmed, reconfirmed: newlyConfirmed && !holdLive, creditShortfall,
+    };
+  } catch (err) {
+    if (!isConstraintError(err)) throw err;
+    if (holdLive) return { retry: 'state' }; // swept or cancelled meanwhile: reload
+    if (await seatConflict(env, booking, now)) {
+      // The seats are gone: keep the money on record, never oversell.
+      await env.DB.batch([
+        ...expiryStatements(env, bookingId),
+        refs, ...ledger, flagStatement(env, bookingId, 'paid_no_seat'), recompute,
+      ]);
+      logEvent('paid_no_seat', { booking_id: bookingId.slice(0, 8) });
+      return { ok: false, error: 'paid_no_seat', flagged: 'paid_no_seat' };
+    }
+    if (!skipCredits && booking.credit_cents > 0 && booking.status === 'expired') return { retry: 'credit' };
+    return { retry: 'state' };
+  }
+}
+
+// --- Ending a booking --------------------------------------------------------
+
+async function tryExpireCheckout(env, checkoutRef) {
+  try {
+    await getPaymentsDriver(env).expireCheckout(checkoutRef);
+    return true;
+  } catch (err) {
+    logError('checkout_expire_failed', err, {});
+    return false;
+  }
+}
+
+// Expire a pending booking now (seats released; its credit redemptions and
+// voucher use are given back in the same batch). Returns true if it changed.
+export async function expireBooking(env, bookingId) {
+  const results = await env.DB.batch(expiryStatements(env, bookingId));
+  const changed = results[results.length - 1].meta.changes > 0;
+  if (changed) logEvent('booking_expired', { booking_id: bookingId.slice(0, 8) });
+  return changed;
+}
+
+// Pay-later holds (admin bookings, waitlist offers, auto-enrol) last days;
+// a checkout hold lasts PENDING_BOOKING_EXPIRY_SECS.
+function isCheckoutHold(booking) {
+  const span = Date.parse(booking.expires_at) - Date.parse(booking.created_at);
+  return Number.isFinite(span) && span <= (PENDING_BOOKING_EXPIRY_SECS + 300) * 1000;
+}
+
+// The parent left (or Stripe expired) a hosted checkout. A checkout hold is
+// released; a longer pay-later hold keeps its seats and just forgets the
+// abandoned checkout. Ignored when a different checkout is now attached.
+// Returns 'expired' | 'detached' | 'noop'.
+export async function abandonCheckout(env, bookingId, checkoutRef = null) {
+  const booking = await env.DB.prepare(
+    `SELECT id, status, payment_ref, created_at, expires_at FROM bookings WHERE id = ?1`,
+  ).bind(bookingId).first();
+  if (!booking || booking.status !== 'pending') return 'noop';
+  if (checkoutRef && booking.payment_ref && booking.payment_ref !== checkoutRef) return 'noop';
+  if (isCheckoutHold(booking)) {
+    return (await expireBooking(env, bookingId)) ? 'expired' : 'noop';
+  }
+  await env.DB.prepare(
+    `UPDATE bookings SET payment_ref = NULL WHERE id = ?1 AND status = 'pending' AND payment_ref IS ?2`,
+  ).bind(bookingId, booking.payment_ref).run();
+  return 'detached';
+}
+
+// Cancel a pending or confirmed booking (owner action; parents cannot cancel
+// at launch). Its booking_sessions rows stop holding seats without being
+// touched. A pending booking's live Stripe checkout is expired first (so it
+// can no longer be paid) and its credits/voucher use are given back; a
+// confirmed booking keeps its redemptions (refunds/credits are the owner's
+// call). An instalment plan's subscription is stopped so no further
+// instalments are taken.
+// Returns { ok, error?, checkoutExpired, subscriptionStopped }.
+export async function cancelBooking(env, bookingId, { by = 'system', reason = '', now = nowIso(), stopPayments = true } = {}) {
+  const booking = await env.DB.prepare(
+    `SELECT id, status, payment_ref, stripe_subscription_id, payment_status FROM bookings WHERE id = ?1`,
+  ).bind(bookingId).first();
+  if (!booking) return { ok: false, error: 'not_found' };
+  if (booking.status !== 'pending' && booking.status !== 'confirmed') return { ok: false, error: booking.status };
+
+  let checkoutExpired = null;
+  if (stopPayments && booking.status === 'pending' && booking.payment_ref) {
+    checkoutExpired = await tryExpireCheckout(env, booking.payment_ref);
+  }
+
+  const results = await env.DB.batch([
+    ...reverseRedemptionStatements(env, bookingId, { whenStatusIn: ['pending'] }),
+    ...voucherReleaseStatements(env, bookingId, { whenStatusIn: ['pending'] }),
+    env.DB.prepare(
+      `UPDATE bookings SET status = 'cancelled', cancelled_at = ?2, cancelled_by = ?3, cancel_reason = ?4,
+              plan_next_charge_at = NULL
+       WHERE id = ?1 AND status IN ('pending', 'confirmed')`,
+    ).bind(bookingId, now, String(by), String(reason || '').slice(0, 500)),
+  ]);
+  const changed = results[results.length - 1].meta.changes > 0;
+  if (!changed) return { ok: false, error: 'state_changed', checkoutExpired, subscriptionStopped: null };
+
+  let subscriptionStopped = null;
+  if (stopPayments && booking.stripe_subscription_id && booking.payment_status !== 'plan_complete') {
+    try {
+      await getPaymentsDriver(env).cancelSubscription(booking.stripe_subscription_id);
+      subscriptionStopped = true;
+    } catch (err) {
+      logError('subscription_cancel_failed', err, { booking_id: bookingId.slice(0, 8) });
+      subscriptionStopped = false;
+    }
+  }
+  logEvent('booking_cancelled', { booking_id: bookingId.slice(0, 8), by: String(by).slice(0, 8) });
+  return { ok: true, checkoutExpired, subscriptionStopped };
+}
+
+// Lapse pending bookings whose hold has passed (all, or one account's),
+// giving back their credit redemptions and voucher uses in the same atomic
+// batch. Read paths already ignore lapsed holds; this keeps credits and
+// voucher counts right. Returns the number of bookings expired.
+export async function sweepExpiredBookings(env, { now = nowIso(), userId = null } = {}) {
+  const userClause = userId ? 'AND lb.user_id = ?2' : '';
+  const binds = userId ? [now, userId] : [now];
+  const probe = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM bookings lb WHERE lb.status = 'pending' AND lb.expires_at <= ?1 ${userClause}`,
+  ).bind(...binds).first();
+  if (!probe.n) return 0;
+
+  const lapsed = `SELECT lb.id FROM bookings lb WHERE lb.status = 'pending' AND lb.expires_at <= ?1 ${userClause}`;
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE credits
+       SET remaining_cents = remaining_cents + (SELECT COALESCE(SUM(cr.amount_cents), 0) FROM credit_redemptions cr
+                                                WHERE cr.credit_id = credits.id AND cr.booking_id IN (${lapsed}))
+       WHERE id IN (SELECT cr.credit_id FROM credit_redemptions cr WHERE cr.booking_id IN (${lapsed}))`,
+    ).bind(...binds),
+    env.DB.prepare(`DELETE FROM credit_redemptions WHERE booking_id IN (${lapsed})`).bind(...binds),
+    env.DB.prepare(
+      `UPDATE vouchers
+       SET uses = MAX(0, uses - (SELECT COUNT(*) FROM bookings vb
+                                 WHERE vb.voucher_code = vouchers.code AND vb.id IN (${lapsed})))
+       WHERE code IN (SELECT vb.voucher_code FROM bookings vb WHERE vb.id IN (${lapsed}))`,
+    ).bind(...binds),
+    env.DB.prepare(`UPDATE bookings SET status = 'expired' WHERE id IN (${lapsed})`).bind(...binds),
+  ]);
+  const count = results[results.length - 1].meta.changes;
+  if (count > 0) logEvent('bookings_swept', { count });
+  return count;
+}
+
+// --- Reading bookings --------------------------------------------------------
+
+// Columns safe to show the booking's own family (no admin notes).
+const PARENT_BOOKING_COLUMNS = `b.id, b.user_id, b.child_id, b.kind, b.term_id, b.status,
+  b.list_amount_cents, b.discount_cents, b.voucher_code, b.credit_cents, b.amount_cents, b.paid_cents,
+  b.currency, b.payment_method, b.payment_status, b.payment_provider, b.payment_ref,
+  b.stripe_subscription_id, b.plan_instalments, b.plan_instalment_cents, b.plan_interval,
+  b.plan_next_charge_at, b.paid_at, b.waiver_version, b.waiver_accepted_at, b.photo_consent_snapshot,
+  b.purchase_tracked_at, b.capi_sent, b.needs_attention, b.created_at, b.expires_at, b.cancelled_at`;
+
+async function bookingSessions(env, bookingId) {
+  const rows = await env.DB.prepare(
+    `SELECT cs.id, cs.starts_at, cs.duration_mins, cs.casual_price_cents, cs.status AS session_status,
+            bs.status, bs.attendance, bs.transferred_to_session_id, cl.name AS class_name, cl.venue
      FROM booking_sessions bs
      JOIN class_sessions cs ON cs.id = bs.session_id
      JOIN classes cl ON cl.id = cs.class_id
      WHERE bs.booking_id = ?1
      ORDER BY cs.starts_at`,
   ).bind(bookingId).all();
-
-  return { ...booking, sessions: sessions.results || [] };
+  return rows.results || [];
 }
 
-// Effective status: a pending booking past its hold is shown (and treated) as
-// expired even before the sweep has updated the row.
-export function effectiveStatus(booking, now = nowIso()) {
-  if (booking.status === 'pending' && booking.expires_at && booking.expires_at <= now) {
-    return 'expired';
-  }
-  return booking.status;
-}
-
-// All bookings for an account's dashboard, newest first, with session times.
-export async function listUserBookings(env, userId) {
-  const rows = await env.DB.prepare(
-    `SELECT b.id, b.status, b.amount_cents, b.paid_at, b.created_at, b.expires_at,
-            c.name AS child_name,
-            (SELECT GROUP_CONCAT(cs.starts_at, '|') FROM booking_sessions bs
-             JOIN class_sessions cs ON cs.id = bs.session_id
-             WHERE bs.booking_id = b.id) AS session_starts
+// A booking with child, term and sessions, visible ONLY to the owning
+// account. Missing and not-owned ids return the same null (no cross-account
+// disclosure, CWE-639 / API1 BOLA).
+export async function getOwnedBooking(env, bookingId, userId) {
+  const booking = await env.DB.prepare(
+    `SELECT ${PARENT_BOOKING_COLUMNS}, c.name AS child_name, t.name AS term_name, tc.name AS class_name
      FROM bookings b
      JOIN children c ON c.id = b.child_id
+     LEFT JOIN terms t ON t.id = b.term_id
+     LEFT JOIN classes tc ON tc.id = t.class_id
+     WHERE b.id = ?1 AND b.user_id = ?2`,
+  ).bind(bookingId, userId).first();
+  if (!booking) return null;
+  return { ...booking, sessions: await bookingSessions(env, bookingId) };
+}
+
+// Admin view of any booking: every column plus parent, child, term, sessions.
+export async function getBooking(env, bookingId) {
+  const booking = await env.DB.prepare(
+    `SELECT b.*, u.email AS parent_email, u.name AS parent_name, u.phone AS parent_phone,
+            c.name AS child_name, c.dob AS child_dob, t.name AS term_name, tc.name AS class_name
+     FROM bookings b
+     JOIN users u ON u.id = b.user_id
+     JOIN children c ON c.id = b.child_id
+     LEFT JOIN terms t ON t.id = b.term_id
+     LEFT JOIN classes tc ON tc.id = t.class_id
+     WHERE b.id = ?1`,
+  ).bind(bookingId).first();
+  if (!booking) return null;
+  return { ...booking, sessions: await bookingSessions(env, bookingId) };
+}
+
+// An account's bookings for its dashboard, newest first.
+export async function listUserBookings(env, userId) {
+  const rows = await env.DB.prepare(
+    `SELECT ${PARENT_BOOKING_COLUMNS}, c.name AS child_name, t.name AS term_name, tc.name AS class_name,
+            (SELECT GROUP_CONCAT(cs.starts_at, '|') FROM booking_sessions bs
+             JOIN class_sessions cs ON cs.id = bs.session_id
+             WHERE bs.booking_id = b.id AND bs.status = 'booked') AS session_starts
+     FROM bookings b
+     JOIN children c ON c.id = b.child_id
+     LEFT JOIN terms t ON t.id = b.term_id
+     LEFT JOIN classes tc ON tc.id = t.class_id
      WHERE b.user_id = ?1
      ORDER BY b.created_at DESC
      LIMIT 100`,
@@ -252,109 +915,38 @@ export async function listUserBookings(env, userId) {
   return rows.results || [];
 }
 
-// Mark a booking expired (seat released).
-export async function expireBooking(env, bookingId) {
-  await env.DB.prepare(
-    `UPDATE bookings SET status = 'expired' WHERE id = ?1 AND status = 'pending'`,
-  ).bind(bookingId).run();
+// A pending booking past its hold is shown (and treated) as expired even
+// before the sweep has updated the row.
+export function effectiveStatus(booking, now = nowIso()) {
+  if (booking.status === 'pending' && booking.expires_at && booking.expires_at <= now) return 'expired';
+  return booking.status;
 }
 
-// Opportunistic cleanup: lapse old pending bookings so they stop holding seats.
-// Read paths already exclude lapsed holds, so this is tidiness, not correctness.
-export async function sweepExpiredBookings(env) {
-  const now = nowIso();
-  const result = await env.DB.prepare(
-    `UPDATE bookings SET status = 'expired'
-     WHERE status = 'pending' AND expires_at <= ?1`,
-  ).bind(now).run();
-  if (result.meta.changes > 0) {
-    logEvent('bookings_swept', { count: result.meta.changes });
-  }
-}
-
-// Public class list: active classes with their upcoming scheduled sessions and
-// live availability.
-export async function listOpenClasses(env) {
-  const now = nowIso();
-  const rows = await env.DB.prepare(
-    `SELECT c.id AS class_id, c.name, c.description, c.venue, c.age_range,
-            cs.id AS session_id, cs.starts_at, cs.duration_mins, cs.price_cents, cs.capacity,
-            cs.term_label,
-            (${HELD_SEATS_SQL.replace('?#NOW#', '?1')}) AS seats_held
-     FROM classes c
-     JOIN class_sessions cs ON cs.class_id = c.id
-     WHERE c.active = 1 AND cs.status = 'scheduled' AND cs.starts_at > ?1
-     ORDER BY c.name, cs.starts_at`,
-  ).bind(now).all();
-
-  const classes = new Map();
-  for (const row of rows.results || []) {
-    if (!classes.has(row.class_id)) {
-      classes.set(row.class_id, {
-        id: row.class_id,
-        name: row.name,
-        description: row.description,
-        venue: row.venue,
-        ageRange: row.age_range,
-        sessions: [],
-      });
-    }
-    classes.get(row.class_id).sessions.push({
-      id: row.session_id,
-      startsAt: row.starts_at,
-      durationMins: row.duration_mins,
-      priceCents: row.price_cents,
-      capacity: row.capacity,
-      seatsHeld: row.seats_held,
-      seatsLeft: Math.max(0, row.capacity - row.seats_held),
-      termLabel: row.term_label || '',
-    });
-  }
-  return [...classes.values()];
-}
-
-export function formatAud(cents) {
-  return `$${(cents / 100).toFixed(2)}`;
-}
-
-// Everything needed to notify the parent about a booking (confirmation email,
-// Conversions API): contact details plus child and session detail. Internal —
-// never exposed to request handlers that serve other accounts.
+// Everything needed to email the family or report the conversion: contact
+// details, child, term/class, money/plan fields and booked sessions. Internal
+// — never rendered for another account.
 export async function loadBookingForNotification(env, bookingId) {
   const booking = await env.DB.prepare(
-    `SELECT b.id, b.status, b.amount_cents, b.capi_sent, u.email, u.phone, u.name AS parent_name,
-            c.name AS child_name
+    `SELECT ${PARENT_BOOKING_COLUMNS}, u.email, u.phone, u.name AS parent_name,
+            c.name AS child_name, t.name AS term_name, tc.name AS class_name
      FROM bookings b
      JOIN users u ON u.id = b.user_id
      JOIN children c ON c.id = b.child_id
+     LEFT JOIN terms t ON t.id = b.term_id
+     LEFT JOIN classes tc ON tc.id = t.class_id
      WHERE b.id = ?1`,
   ).bind(bookingId).first();
   if (!booking) return null;
-
-  const sessions = await env.DB.prepare(
-    `SELECT cs.starts_at, cs.duration_mins, cl.name AS class_name, cl.venue
-     FROM booking_sessions bs
-     JOIN class_sessions cs ON cs.id = bs.session_id
-     JOIN classes cl ON cl.id = cs.class_id
-     WHERE bs.booking_id = ?1
-     ORDER BY cs.starts_at`,
-  ).bind(bookingId).all();
-
-  return { ...booking, sessions: sessions.results || [] };
+  const sessions = (await bookingSessions(env, bookingId)).filter((s) => s.status === 'booked');
+  return { ...booking, sessions };
 }
 
-// Admin schedule view: sessions with live fullness (confirmed + unexpired
-// pending bookings count; lapsed pending and cancelled never count).
-export async function listSessionsWithFullness(env, { upcomingOnly = true } = {}) {
-  const now = nowIso();
-  const rows = await env.DB.prepare(
-    `SELECT cs.id, cs.class_id, cs.starts_at, cs.duration_mins, cs.capacity,
-            cs.price_cents, cs.status, cs.term_label, c.name AS class_name, c.active AS class_active,
-            (${HELD_SEATS_SQL.replace('?#NOW#', '?1')}) AS seats_held
-     FROM class_sessions cs
-     JOIN classes c ON c.id = cs.class_id
-     ${upcomingOnly ? 'WHERE cs.starts_at > ?1' : ''}
-     ORDER BY cs.starts_at`,
-  ).bind(now).all();
-  return rows.results || [];
+// Mark the pixel Purchase as rendered. True only for the one request that
+// flips it (D12: Purchase fires at most once per booking).
+export async function markPurchaseTracked(env, bookingId, now = nowIso()) {
+  const result = await env.DB.prepare(
+    `UPDATE bookings SET purchase_tracked_at = ?2
+     WHERE id = ?1 AND status = 'confirmed' AND purchase_tracked_at IS NULL`,
+  ).bind(bookingId, now).run();
+  return result.meta.changes > 0;
 }

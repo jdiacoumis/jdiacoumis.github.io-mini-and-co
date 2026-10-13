@@ -1,25 +1,27 @@
 // Capacity-guarded booking creation against a real D1 database: the guarded
 // batch must never oversell a session, must roll back atomically when any
-// selected session is full, and must release seats when holds lapse.
+// selected session is full, and must release seats when holds lapse — all
+// through the single held-seat definition (booked row + live booking).
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createTestDb } from './helpers.js';
-import { createPendingBooking, expireBooking, loadSessionsForBooking, sessionsAlreadyBookedForChild } from '../../src/lib/domain.js';
+import { createTestDb, daysFromNow } from './helpers.js';
+import {
+  createPendingBooking, expireBooking, loadSessionsForBooking, sessionsAlreadyBookedForChild,
+} from '../../src/lib/domain.js';
 
 const { env, dispose } = await createTestDb();
 after(() => dispose());
 
-const NOW = new Date();
-const FUTURE = new Date(NOW.getTime() + 7 * 86400e3).toISOString().replace(/\.\d{3}Z$/, 'Z');
-const PAST = new Date(NOW.getTime() - 86400e3).toISOString().replace(/\.\d{3}Z$/, 'Z');
+const FUTURE = daysFromNow(7);
+const PAST = daysFromNow(-1);
 
 async function seed() {
   const run = (sql, ...binds) => env.DB.prepare(sql).bind(...binds).run();
   await run(`INSERT INTO users (id, email, created_at) VALUES ('u1', 'p1@example.com', ?1), ('u2', 'p2@example.com', ?1)`, PAST);
   await run(`INSERT INTO children (id, user_id, name, dob, created_at) VALUES ('c1', 'u1', 'Ava', '2025-10-01', ?1), ('c2', 'u2', 'Billy', '2025-09-01', ?1)`, PAST);
   await run(`INSERT INTO classes (id, name, active, created_at) VALUES ('cls', 'Test Class', 1, ?1)`, PAST);
-  await run(`INSERT INTO class_sessions (id, class_id, starts_at, duration_mins, capacity, price_cents, status, created_at)
+  await run(`INSERT INTO class_sessions (id, class_id, starts_at, duration_mins, capacity, casual_price_cents, status, created_at)
              VALUES ('s-two', 'cls', ?1, 45, 2, 2500, 'scheduled', ?2),
                     ('s-open', 'cls', ?1, 45, 10, 2500, 'scheduled', ?2),
                     ('s-past', 'cls', ?2, 45, 10, 2500, 'scheduled', ?2),
@@ -29,7 +31,18 @@ async function seed() {
 const baseArgs = { waiverVersion: 'test-1', photoConsent: true, medicalNotes: '' };
 
 function book(userId, childId, sessionIds) {
-  return createPendingBooking(env, { userId, childId, sessionIds, ...baseArgs });
+  const amountCents = 2500 * sessionIds.length;
+  return createPendingBooking(env, {
+    userId, childId, kind: 'casual', sessionIds, ...baseArgs,
+    quote: { listCents: amountCents, discountCents: 0, creditCents: 0, amountCents, allocations: [] },
+  });
+}
+
+async function addSession(id, capacity) {
+  await env.DB.prepare(
+    `INSERT INTO class_sessions (id, class_id, starts_at, duration_mins, capacity, casual_price_cents, status, created_at)
+     VALUES (?1, 'cls', ?2, 45, ?3, 2500, 'scheduled', ?4)`,
+  ).bind(id, FUTURE, capacity, PAST).run();
 }
 
 await seed();
@@ -46,9 +59,6 @@ test('books up to capacity, then reports the full session', async () => {
 });
 
 test('multi-session booking with one full session rolls back entirely', async () => {
-  // s-two is now full; pair it with s-open and bypass the pre-check by
-  // deleting one blocker AFTER load... simpler: call with both and assert no
-  // partial rows exist for the open session either.
   const result = await book('u2', 'c2', ['s-open', 's-two']);
   assert.ok(result.error, 'booking should fail');
 
@@ -78,23 +88,31 @@ test('expired hold frees the seat', async () => {
   const blocked = await book('u1', 'c1', ['s-two']);
   assert.ok(blocked.error, 's-two starts full');
 
-  // Lapse c1's own hold specifically, so the rebooking below is neither
-  // blocked by capacity nor by the duplicate-child guard.
   const holder = await env.DB.prepare(
     `SELECT b.id FROM bookings b JOIN booking_sessions bs ON bs.booking_id = b.id
      WHERE bs.session_id = 's-two' AND b.status = 'pending' AND b.child_id = 'c1' LIMIT 1`,
   ).first();
-  await expireBooking(env, holder.id);
+  assert.equal(await expireBooking(env, holder.id), true);
+  assert.equal(await expireBooking(env, holder.id), false, 'expiring twice is a no-op');
 
   const rebook = await book('u1', 'c1', ['s-two']);
   assert.ok(rebook.id, 'freed seat should be bookable');
 });
 
+test('a cancelled or transferred week stops holding its seat', async () => {
+  await addSession('s-one', 1);
+  const first = await book('u1', 'c1', ['s-one']);
+  assert.ok(first.id);
+  assert.equal((await book('u2', 'c2', ['s-one'])).error, 'unavailable');
+
+  await env.DB.prepare(`UPDATE booking_sessions SET status = 'cancelled' WHERE booking_id = ?1`).bind(first.id).run();
+  const [snap] = await loadSessionsForBooking(env, ['s-one']);
+  assert.equal(snap.seats_held, 0, 'a cancelled row holds no seat');
+  assert.ok((await book('u2', 'c2', ['s-one'])).id, 'the released seat is bookable');
+});
+
 test('concurrent burst for the last seats never oversells', async () => {
-  await env.DB.prepare(
-    `INSERT INTO class_sessions (id, class_id, starts_at, duration_mins, capacity, price_cents, status, created_at)
-     VALUES ('s-race', 'cls', ?1, 45, 3, 2500, 'scheduled', ?2)`,
-  ).bind(FUTURE, PAST).run();
+  await addSession('s-race', 3);
   // Eight distinct children racing (the per-child duplicate guard would
   // otherwise dominate the outcome).
   for (let i = 0; i < 8; i += 1) {
@@ -122,10 +140,7 @@ test('concurrent burst for the last seats never oversells', async () => {
 });
 
 test('the same child cannot be double-booked into one session', async () => {
-  await env.DB.prepare(
-    `INSERT INTO class_sessions (id, class_id, starts_at, duration_mins, capacity, price_cents, status, created_at)
-     VALUES ('s-dup', 'cls', ?1, 45, 10, 2500, 'scheduled', ?2)`,
-  ).bind(FUTURE, PAST).run();
+  await addSession('s-dup', 10);
 
   const first = await book('u1', 'c1', ['s-dup']);
   assert.ok(first.id, 'first booking succeeds');
@@ -145,10 +160,7 @@ test('the same child cannot be double-booked into one session', async () => {
 });
 
 test('concurrent duplicate attempts for one child resolve to a single booking', async () => {
-  await env.DB.prepare(
-    `INSERT INTO class_sessions (id, class_id, starts_at, duration_mins, capacity, price_cents, status, created_at)
-     VALUES ('s-dup-race', 'cls', ?1, 45, 10, 2500, 'scheduled', ?2)`,
-  ).bind(FUTURE, PAST).run();
+  await addSession('s-dup-race', 10);
 
   const attempts = await Promise.all(
     Array.from({ length: 4 }, () => book('u1', 'c1', ['s-dup-race'])),
@@ -164,6 +176,7 @@ test('concurrent duplicate attempts for one child resolve to a single booking', 
 test('availability snapshot reflects holds', async () => {
   const [snap] = await loadSessionsForBooking(env, ['s-race']);
   assert.equal(snap.seats_held, 3);
+  assert.equal(snap.seats_left, 0);
   assert.equal(snap.bookable, false);
   assert.equal(snap.reason, 'full');
 });
