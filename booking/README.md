@@ -254,7 +254,7 @@ Local conveniences (all `ENVIRONMENT=development` only, from `.dev.vars`):
 ## Tests
 
 ```bash
-npm test      # 264 unit tests: pricing, ledger, booking domain (races,
+npm test      # 260 unit tests: pricing, ledger, booking domain (races,
               # credits, vouchers, guarded confirmation, hold rules, trials),
               # webhooks (claim ordering, retries, plans, refunds), Stripe
               # driver (incl. listInvoices), Check with Stripe reconciliation,
