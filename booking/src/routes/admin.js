@@ -775,14 +775,14 @@ export async function handleAdminRoster(req, env, params) {
           <strong>${r.child_name}</strong><br><span class="muted">${formatAge(r.child_dob, session.starts_at)} at session</span>
           ${isAdmin ? html`<br><a href="/admin/bookings/${r.booking_id}" class="muted">Booking</a>` : ''}
         </td>
-        <td>${attendanceControls(r, session.id, user.csrfToken)}
+        <td data-label="Attendance">${attendanceControls(r, session.id, user.csrfToken)}
           ${r.attendance && r.attendance_marked_at ? html`<span class="muted">${r.attendance === 'present' ? 'Here' : 'Away'} · ${formatSydney(r.attendance_marked_at, 'time')}</span>` : ''}</td>
-        <td>${r.parent_name || '—'}<br><span class="muted">${r.parent_email}${r.parent_phone ? html`<br><a href="tel:${r.parent_phone}">${r.parent_phone}</a>` : ''}</span></td>
-        <td class="${consent.allowed ? '' : 'consent-no'}">${consent.allowed ? 'Yes' : 'No'}${consent.changed ? html`<br><span class="muted">changed since booking</span>` : ''}</td>
-        <td class="roster-medical">${currentNotes || snapshotNotes || '—'}${currentNotes && snapshotNotes && currentNotes !== snapshotNotes
+        <td data-label="Parent">${r.parent_name || '—'}<br><span class="muted">${r.parent_email}${r.parent_phone ? html`<br><a href="tel:${r.parent_phone}">${r.parent_phone}</a>` : ''}</span></td>
+        <td data-label="Photos OK" class="${consent.allowed ? '' : 'consent-no'}">${consent.allowed ? 'Yes' : 'No'}${consent.changed ? html`<br><span class="muted">changed since booking</span>` : ''}</td>
+        <td data-label="Medical notes" class="roster-medical">${currentNotes || snapshotNotes || '—'}${currentNotes && snapshotNotes && currentNotes !== snapshotNotes
           ? html`<br><span class="muted">At booking: ${snapshotNotes}</span>` : ''}</td>
-        <td>${KIND_LABELS[r.kind] || r.kind}</td>
-        <td>${payment.label}</td>
+        <td data-label="Booking">${KIND_LABELS[r.kind] || r.kind}</td>
+        <td data-label="Payment">${payment.label}</td>
       </tr>
     `;
   });

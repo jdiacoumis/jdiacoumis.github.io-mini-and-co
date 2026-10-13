@@ -201,7 +201,7 @@ export async function run(ctx) {
     marks.length === 2 && marks[0].attendance === 'present' && marks[0].by_email === ADMIN && marks[1].attendance === 'absent'
       && marks[1].by_email === STAFF && marks.every((m) => m.attendance_marked_at), JSON.stringify(marks));
   const gridAfter = await ctx.fetch(`/admin/terms/${t10.id}`, { cookie: admin });
-  ctx.check('the grid shows ✓ and ✗', gridAfter.text.includes('grid-present') && gridAfter.text.includes('grid-absent'));
+  ctx.check('the grid shows ✓ and ✗', gridAfter.text.includes('grid-cell grid-present') && gridAfter.text.includes('grid-cell grid-absent'));
   for (const path of ['/admin/terms', `/admin/terms/${t10.id}`, '/admin/bookings/new', '/admin/credits', `/admin/bookings/${a.bookingId}`, '/admin/vouchers']) {
     ctx.check(`a facilitator is denied ${path.replace(/[a-f0-9-]{36}/, ':id')}`, (await ctx.fetch(path, { cookie: staff })).status === 403);
   }
@@ -258,7 +258,7 @@ export async function run(ctx) {
       && w6Credits.some((cr) => cr.source_booking_id === a.bookingId) && w6Credits.some((cr) => cr.source_booking_id === d.bookingId), JSON.stringify(w6Credits));
   ctx.check('the cancellation notice was sent', ctx.sql(`SELECT COUNT(*) AS n FROM email_log WHERE session_id = '${w6}'`)[0].n >= 1);
   const gridCancelled = await ctx.fetch(`/admin/terms/${t10.id}`, { cookie: admin });
-  ctx.check('the grid marks the cancelled week', gridCancelled.text.includes('grid-week-cancelled') && gridCancelled.text.includes('grid-moved'));
+  ctx.check('the grid marks the cancelled week', gridCancelled.text.includes('grid-week-cancelled') && gridCancelled.text.includes('grid-cell grid-moved'));
 
   ctx.section('Edit the term, add and remove weeks, open and close');
   const edit = await ctx.fetch(`/admin/terms/${t1130.id}/edit`, { cookie: admin });

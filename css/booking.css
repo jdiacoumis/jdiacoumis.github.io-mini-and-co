@@ -943,7 +943,21 @@ button:active {
 }
 
 .grid-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs) var(--space-md);
+  list-style: none;
+  padding: 0;
   margin: var(--space-xs) 0 0;
+  font-size: 0.85rem;
+  color: var(--colour-text-soft);
+}
+
+.grid-legend-symbol {
+  display: inline-block;
+  min-width: 1.6rem;
+  text-align: center;
+  border-radius: var(--radius-sm);
 }
 
 /* Roster and attendance: big touch targets for a phone in one hand. */
@@ -957,6 +971,7 @@ button:active {
 .attendance-button {
   min-height: 44px;
   min-width: 44px;
+  white-space: nowrap;
   padding: var(--space-2xs) var(--space-sm);
   background-color: #fff;
   color: var(--colour-text);
@@ -1016,6 +1031,53 @@ button:active {
 
   .nested-fields {
     margin-left: 0;
+  }
+
+  /* On a phone each child on the roster is a card: name, big buttons, then
+     the details with their labels. */
+  .roster-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+  }
+
+  .roster-table,
+  .roster-table tbody,
+  .roster-table tr,
+  .roster-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .roster-table tr {
+    border-bottom: 1px solid var(--colour-line);
+    padding: var(--space-xs) 0;
+  }
+
+  .roster-table td {
+    border: none;
+    padding: var(--space-2xs) var(--space-sm);
+  }
+
+  .roster-table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 0.8rem;
+    color: var(--colour-text-muted);
+  }
+
+  .roster-table .attendance-row-present td:first-child,
+  .roster-table .attendance-row-absent td:first-child {
+    border-left: none;
+  }
+
+  .roster-table .attendance-row-present { border-left: 4px solid var(--colour-accent-sage); }
+  .roster-table .attendance-row-absent { border-left: 4px solid var(--colour-accent-blush); }
+
+  .roster-medical {
+    max-width: none;
   }
 }
 

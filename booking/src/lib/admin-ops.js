@@ -275,7 +275,7 @@ export const GRID_CELLS = {
   absent: { symbol: '✗', label: 'Absent' },
   booked: { symbol: '·', label: 'Booked' },
   cancelled: { symbol: '–', label: 'Cancelled' },
-  moved: { symbol: '↷', label: 'Moved to another class' },
+  moved: { symbol: '→', label: 'Moved to another class' },
   none: { symbol: '', label: 'Not booked' },
 };
 

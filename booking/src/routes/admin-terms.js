@@ -582,7 +582,9 @@ export async function handleAdminTermGrid(req, env, params) {
         <a href="/admin/waitlist?term=${term.id}" class="button-link button-secondary button-small">Waitlist</a>
         <a href="/admin/bookings/new" class="button-link button-secondary button-small">New booking</a>
       </div>
-      <p class="grid-legend muted">✓ present · ✗ absent · · booked · – cancelled · ↷ moved to another class</p>
+      <ul class="grid-legend">${joinHtml(['present', 'absent', 'booked', 'cancelled', 'moved'].map((code) => html`
+        <li><span class="grid-legend-symbol grid-${code}" aria-hidden="true">${GRID_CELLS[code].symbol}</span> ${GRID_CELLS[code].label.toLowerCase()}</li>`))}
+      </ul>
       ${sessions.length ? html`
         <div class="table-scroll">
           <table class="booking-table term-grid">
