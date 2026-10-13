@@ -30,12 +30,12 @@ import {
   getBooking, loadTerm, listSessionsWithFullness, listOneOffSessions, prepareBooking, abandonCheckout,
   formatAud, KIND_LABELS, NEEDS_ATTENTION_LABELS, effectiveStatus,
 } from '../lib/domain.js';
-import { issueCredit, voidCredit, ledgerTotals } from '../lib/ledger.js';
+import { issueCredit, voidCredit, ledgerTotals, recomputeStatement } from '../lib/ledger.js';
 import { normaliseVoucherCode } from '../lib/pricing.js';
 import { getPaymentsDriver } from '../lib/payments-driver.js';
 import { sendTemplate, notifyBookingConfirmed } from '../lib/notify.js';
 import { offlineReceipt, payLaterHold } from '../lib/emails/ops.js';
-import { processStripeEvent } from './webhooks.js';
+import { processStripeEvent, refundStatements } from './webhooks.js';
 import { logEvent, logError } from '../lib/log.js';
 import {
   createAdminBooking, findOrCreateParent, createChild, listAttention, resolveAttention, clearFlagIf,
@@ -512,6 +512,7 @@ export const CHECK_NOTICES = {
   'check-plan-other': 'Stripe returned an unusual status for the instalment plan — please look in the Stripe dashboard.',
   resolved: 'Marked as sorted — the note is saved on the booking.',
   'not-flagged': 'That booking was already sorted.',
+  'refunds-added': 'Refunds made in Stripe that were missing here have been added to the payments.',
 };
 
 // Stripe subscription status → notice key.
@@ -569,6 +570,50 @@ export async function reconcileInstalments(env, bookingId) {
   const added = (await ledgerTotals(env, booking.id)).instalments_paid - before;
   if (added > 0) logEvent('instalments_reconciled', { booking_id: booking.id.slice(0, 8), added });
   return added;
+}
+
+// Refunds made in Stripe whose charge.refunded webhook never arrived (or
+// could not be matched): every card payment behind the booking — the
+// checkout's payment intent, each instalment's — is asked for its refunds,
+// and any refund not yet in the ledger is added. Rows are keyed on the
+// refund id, like the webhook's, so nothing is recorded twice. Returns the
+// number of refunds added, or null when Stripe could not be asked.
+export async function reconcileRefunds(env, bookingId) {
+  const driver = getPaymentsDriver(env);
+  const booking = await env.DB.prepare(`SELECT payment_intent FROM bookings WHERE id = ?1`).bind(bookingId).first();
+  if (!booking) return 0;
+  const rows = (await env.DB.prepare(
+    `SELECT provider_ref, kind, payment_intent FROM payments
+     WHERE booking_id = ?1 AND kind IN ('checkout', 'instalment') AND provider_ref IS NOT NULL`,
+  ).bind(bookingId).all()).results || [];
+  try {
+    const intents = new Set(booking.payment_intent ? [booking.payment_intent] : []);
+    for (const row of rows) {
+      let intent = row.payment_intent || (row.kind === 'checkout' && /^pi_/.test(row.provider_ref) ? row.provider_ref : null);
+      if (!intent && row.kind === 'instalment') {
+        intent = await driver.invoicePaymentIntent(row.provider_ref);
+        if (intent) {
+          await env.DB.prepare(`UPDATE payments SET payment_intent = ?2 WHERE provider_ref = ?1 AND payment_intent IS NULL`)
+            .bind(row.provider_ref, intent).run();
+        }
+      }
+      if (intent) intents.add(intent);
+    }
+    let added = 0;
+    for (const paymentIntent of intents) {
+      const refunds = await driver.listRefunds({ paymentIntent });
+      if (!refunds) continue; // a driver that keeps no refunds (the mock)
+      const statements = refundStatements(env, { bookingId, refunds, provider: driver.name, paymentIntent });
+      if (!statements.length) continue;
+      const results = await env.DB.batch([...statements, recomputeStatement(env, bookingId)]);
+      added += results.slice(0, statements.length).filter((r) => r.meta.changes > 0).length;
+    }
+    if (added) logEvent('refunds_reconciled', { booking_id: bookingId.slice(0, 8), added });
+    return added;
+  } catch (err) {
+    logError('check_refunds_failed', err, { booking_id: bookingId.slice(0, 8) });
+    return null;
+  }
 }
 
 async function checkPlanStatus(env, booking) {
@@ -739,8 +784,10 @@ export async function handleAdminCheckWithStripe(req, env, params) {
   ).bind(params.id).first();
   if (!booking) throw notFound();
   const result = await checkWithStripe(env, booking);
-  logEvent('check_with_stripe', { booking_id: booking.id.slice(0, 8), result, by: user.userId.slice(0, 8) });
-  return redirect(`${backTo(form, booking.id)}?ok=${result}`, 303);
+  const refunds = result === 'check-failed' ? 0 : await reconcileRefunds(env, booking.id);
+  logEvent('check_with_stripe', { booking_id: booking.id.slice(0, 8), result, refunds, by: user.userId.slice(0, 8) });
+  const outcome = refunds === null ? 'check-failed' : result;
+  return redirect(`${backTo(form, booking.id)}?ok=${outcome}${refunds > 0 ? '&also=refunds-added' : ''}`, 303);
 }
 
 // POST /admin/bookings/:id/resolve — clear the attention flag with a note.

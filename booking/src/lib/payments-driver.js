@@ -20,14 +20,35 @@
 //                              subscriptionId, bookingId, customerId }],
 //                              newest first (Check with Stripe replays the
 //                              paid ones when invoice.paid webhooks were lost)
+//   invoicePaymentIntent(invoiceId)       → the payment intent that paid an
+//                              invoice, or null (Stripe API 2025-03-31.basil
+//                              removed invoice.payment_intent: Invoice Payments)
+//   invoiceForPaymentIntent(paymentIntentId) → the invoice it paid, or null
+//                              (charge.invoice was removed the same way)
+//   listRefunds({ paymentIntent })     → [{ id, amount, status, created,
+//                              paymentIntent, chargeId }], or null when the
+//                              driver keeps no refunds (the mock)
 //   createBillingPortalSession(customerId, returnUrl)  → url
 //   verifyWebhook(signatureHeader, rawBody)            → event (or throws)
+//
+// Every Stripe request names STRIPE_API_VERSION (the Stripe-Version header):
+// the code reads fields as they are in that version, whatever the account's
+// default version is or becomes. The webhook endpoint must be created with
+// the same version (DEPLOYMENT.md), since events are rendered in the
+// endpoint's version, not the request's.
 
 import { hmacSha256Hex, timingSafeEqual } from './crypto.js';
 import { logEvent } from './log.js';
 import { uuid, nowIso } from './db.js';
 
 const STRIPE_API = 'https://api.stripe.com/v1';
+
+// The API version this integration is written against: the last Basil
+// release (2025-03-31.basil moved invoice payments to Invoice Payments and
+// subscription periods to its items; later Basil versions are additive).
+// Changing it is an upgrade: read Stripe's changelog, then re-run the
+// test-mode checks in DEPLOYMENT.md and move the webhook endpoint too.
+export const STRIPE_API_VERSION = '2025-08-27.basil';
 const WEBHOOK_TOLERANCE_SECS = 300; // 5 minutes
 
 // Stripe's minimum Checkout lifetime is 30 minutes; the booking's seat hold
@@ -53,7 +74,10 @@ export function idOf(value) {
 
 async function stripeRequest(env, method, path, params = null) {
   if (!env.STRIPE_SECRET_KEY) throw new Error('STRIPE_SECRET_KEY is not configured');
-  const init = { method, headers: { Authorization: `Bearer ${env.STRIPE_SECRET_KEY}` } };
+  const init = {
+    method,
+    headers: { Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`, 'Stripe-Version': STRIPE_API_VERSION },
+  };
   if (params) {
     init.headers['Content-Type'] = 'application/x-www-form-urlencoded';
     init.body = params.toString();
@@ -73,6 +97,34 @@ async function stripeRequest(env, method, path, params = null) {
     throw err;
   }
   return response.json();
+}
+
+// A Stripe "No such customer / subscription / …" error: the id we hold is
+// not (or no longer) in this Stripe account — e.g. test-mode ids after the
+// switch to live mode.
+export function isMissingResource(err) {
+  return Boolean(err) && (err.code === 'resource_missing' || err.status === 404);
+}
+
+function normaliseRefund(refund) {
+  return {
+    id: typeof refund?.id === 'string' ? refund.id : null,
+    amount: Number.isInteger(refund?.amount) ? refund.amount : 0,
+    status: refund?.status || null,                 // pending | requires_action | succeeded | failed | canceled
+    created: Number.isInteger(refund?.created) ? refund.created : null,
+    paymentIntent: idOf(refund?.payment_intent),
+    chargeId: idOf(refund?.charge),
+  };
+}
+
+// The payment intent of a paid invoice from an Invoice Payment list (or an
+// invoice's `payments` field when it was included): the default payment
+// first, then any paid one.
+export function paymentIntentFromInvoicePayments(list) {
+  const payments = (Array.isArray(list) ? list : [])
+    .filter((p) => p && p.payment && p.payment.type === 'payment_intent' && (!p.status || p.status === 'paid'));
+  const chosen = payments.find((p) => p.is_default) || payments[0];
+  return chosen ? idOf(chosen.payment.payment_intent) : null;
 }
 
 function normaliseCheckout(session) {
@@ -242,6 +294,30 @@ function stripeDriver(env) {
       return (Array.isArray(list?.data) ? list.data : []).map(normaliseInvoice).filter((i) => i.id);
     },
 
+    async invoicePaymentIntent(invoiceId) {
+      const query = new URLSearchParams({ invoice: stripeId(invoiceId, 'invoice'), limit: '10' });
+      const list = await stripeRequest(env, 'GET', `/invoice_payments?${query}`);
+      return paymentIntentFromInvoicePayments(list?.data);
+    },
+
+    async invoiceForPaymentIntent(paymentIntentId) {
+      const query = new URLSearchParams({
+        'payment[type]': 'payment_intent',
+        'payment[payment_intent]': stripeId(paymentIntentId, 'payment intent'),
+        limit: '1',
+      });
+      const list = await stripeRequest(env, 'GET', `/invoice_payments?${query}`);
+      const first = Array.isArray(list?.data) ? list.data[0] : null;
+      return first ? idOf(first.invoice) : null;
+    },
+
+    // A payment intent has at most a handful of refunds: one page holds them.
+    async listRefunds({ paymentIntent }) {
+      const query = new URLSearchParams({ payment_intent: stripeId(paymentIntent, 'payment intent'), limit: '100' });
+      const list = await stripeRequest(env, 'GET', `/refunds?${query}`);
+      return (Array.isArray(list?.data) ? list.data : []).map(normaliseRefund).filter((r) => r.id);
+    },
+
     async createBillingPortalSession(customerId, returnUrl) {
       const params = new URLSearchParams({ customer: stripeId(customerId, 'customer'), return_url: returnUrl });
       const session = await stripeRequest(env, 'POST', '/billing_portal/sessions', params);
@@ -380,6 +456,27 @@ function mockDriver(env) {
         id: r.id, status: r.status, amountPaid: r.amount_paid, amountDue: r.amount_due, paidAt: r.paid_at,
         attemptCount: r.attempt_count, subscriptionId: r.subscription_id, bookingId: r.booking_id, customerId: null,
       }));
+    },
+
+    // A mock instalment's payment intent is derived from its invoice id
+    // (pi_mock_X ↔ in_mock_X), for the invoices dev_mock_invoices holds.
+    async invoicePaymentIntent(invoiceId) {
+      const row = await env.DB.prepare(`SELECT id FROM dev_mock_invoices WHERE id = ?1 AND status = 'paid'`)
+        .bind(String(invoiceId)).first();
+      return row && row.id.startsWith('in_mock_') ? `pi_mock_${row.id.slice('in_mock_'.length)}` : null;
+    },
+
+    async invoiceForPaymentIntent(paymentIntentId) {
+      const pi = String(paymentIntentId || '');
+      if (!pi.startsWith('pi_mock_')) return null;
+      const row = await env.DB.prepare(`SELECT id FROM dev_mock_invoices WHERE id = ?1`)
+        .bind(`in_mock_${pi.slice('pi_mock_'.length)}`).first();
+      return row ? row.id : null;
+    },
+
+    // The mock keeps no refunds; callers fall back to what the event says.
+    async listRefunds() {
+      return null;
     },
 
     async createBillingPortalSession() {

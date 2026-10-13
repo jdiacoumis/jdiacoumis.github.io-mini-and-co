@@ -52,18 +52,20 @@ function checkAmount(kind, amountCents) {
 // --- Payments ----------------------------------------------------------------
 
 // INSERT one ledger row; a repeated provider_ref is silently ignored.
+//   paymentIntent: the card payment behind the row (checkout, instalment or
+//   the refunded one) — how a refund finds its booking (migration 0004)
 export function paymentInsertStatement(env, {
   bookingId, kind, amountCents, provider = null, providerRef = null, method = '', note = '',
-  recordedBy = null, paidAt = null, now = nowIso(),
+  recordedBy = null, paidAt = null, now = nowIso(), paymentIntent = null,
 }) {
   checkAmount(kind, amountCents);
   return env.DB.prepare(
     `INSERT INTO payments (id, booking_id, kind, amount_cents, provider, provider_ref, method, note,
-                           recorded_by, paid_at, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                           recorded_by, paid_at, created_at, payment_intent)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
      ON CONFLICT(provider_ref) DO NOTHING`,
   ).bind(uuid(), bookingId, kind, amountCents, provider, providerRef, String(method || ''),
-    String(note || ''), recordedBy, paidAt || now, now);
+    String(note || ''), recordedBy, paidAt || now, now, paymentIntent || null);
 }
 
 // The 'credit_applied' row for a booking's credit, once (at confirmation).

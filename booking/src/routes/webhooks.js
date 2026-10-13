@@ -20,7 +20,7 @@
 //      ids, guarded confirmation), so reprocessing is always safe.
 //   Email/notification failures never fail an event.
 
-import { getPaymentsDriver, idOf } from '../lib/payments-driver.js';
+import { getPaymentsDriver, idOf, paymentIntentFromInvoicePayments } from '../lib/payments-driver.js';
 import { confirmBooking, abandonCheckout, flagStatement } from '../lib/domain.js';
 import { paymentInsertStatement, recomputeStatement, recomputeBooking, ledgerTotals } from '../lib/ledger.js';
 import { planCancelAt, planExpectedCents, INTERVAL_DAYS } from '../lib/pricing.js';
@@ -149,20 +149,42 @@ async function bookingForSubscription(env, subscription) {
   return row ? row.id : null;
 }
 
-// A charge → its booking: by payment intent (checkout ledger rows are keyed on
-// it), then the invoice (instalment rows), then metadata.
-async function bookingForCharge(env, charge) {
+// The payment intent that paid an invoice, when the event carries it: older
+// API versions put it on the invoice; Basil (2025-03-31) moved it to the
+// invoice's Invoice Payments, which events include only when asked to.
+function paymentIntentOfInvoice(invoice) {
+  return idOf(invoice?.payment_intent) || paymentIntentFromInvoicePayments(invoice?.payments?.data) || null;
+}
+
+// A charge → its booking (review finding: instalment refunds were dropped).
+// By payment intent first — checkout rows are keyed on it and every
+// instalment row stores it (payments.payment_intent); then by the invoice,
+// which pre-Basil events name on the charge and which Stripe's Invoice
+// Payments give for the payment intent otherwise (an instalment recorded
+// before its payment intent was known); then the metadata we set.
+async function bookingForCharge(env, charge, driver) {
   const paymentIntent = idOf(charge?.payment_intent);
   if (paymentIntent) {
-    const byLedger = await env.DB.prepare(`SELECT booking_id FROM payments WHERE provider_ref = ?1`).bind(paymentIntent).first();
+    const byLedger = await env.DB.prepare(
+      `SELECT booking_id FROM payments WHERE provider_ref = ?1 OR payment_intent = ?1 LIMIT 1`,
+    ).bind(paymentIntent).first();
     if (byLedger) return byLedger.booking_id;
     const byBooking = await env.DB.prepare(`SELECT id FROM bookings WHERE payment_intent = ?1`).bind(paymentIntent).first();
     if (byBooking) return byBooking.id;
   }
-  const invoice = idOf(charge?.invoice);
+  let invoice = idOf(charge?.invoice);
+  if (!invoice && paymentIntent) {
+    invoice = await safely('refund_invoice_lookup_failed', driver.invoiceForPaymentIntent(paymentIntent));
+  }
   if (invoice) {
     const byInvoice = await env.DB.prepare(`SELECT booking_id FROM payments WHERE provider_ref = ?1`).bind(invoice).first();
-    if (byInvoice) return byInvoice.booking_id;
+    if (byInvoice) {
+      if (paymentIntent) {
+        await env.DB.prepare(`UPDATE payments SET payment_intent = ?2 WHERE provider_ref = ?1 AND payment_intent IS NULL`)
+          .bind(invoice, paymentIntent).run();
+      }
+      return byInvoice.booking_id;
+    }
   }
   const fromMeta = charge?.metadata?.booking_id;
   if (typeof fromMeta === 'string' && isValidId(fromMeta)) {
@@ -267,7 +289,10 @@ async function onCheckoutCompleted(env, session) {
   const paymentIntent = idOf(session.payment_intent);
   const amount = Number.isInteger(session.amount_total) ? session.amount_total : 0;
   const payment = amount > 0
-    ? { kind: 'checkout', amountCents: amount, provider: driver.name, providerRef: paymentIntent || session.id, method: 'card' }
+    ? {
+      kind: 'checkout', amountCents: amount, provider: driver.name, providerRef: paymentIntent || session.id, method: 'card',
+      paymentIntent,
+    }
     : null;
   const result = await confirmBooking(env, bookingId, { provider: driver.name, paymentRef: session.id, paymentIntent, payment });
   await afterConfirm(env, bookingId, result);
@@ -324,6 +349,12 @@ async function onInvoicePaid(env, invoice) {
   }
   const driver = getPaymentsDriver(env);
   await rememberCustomer(env, bookingId, invoice.customer);
+  // The card payment behind the instalment, so a refund of it (which names
+  // only the payment intent) finds this booking. Not in Basil events: ask
+  // Stripe's Invoice Payments. A failed lookup never fails the event — the
+  // refund path can still find the invoice later.
+  const paymentIntent = paymentIntentOfInvoice(invoice)
+    || await safely('invoice_payment_intent_lookup_failed', driver.invoicePaymentIntent(invoice.id));
   // Stripe does not order events: the first invoice may arrive before
   // checkout.session.completed, so this path confirms (guarded) too.
   const result = await confirmBooking(env, bookingId, {
@@ -331,9 +362,15 @@ async function onInvoicePaid(env, invoice) {
     subscriptionId,
     payment: {
       kind: 'instalment', amountCents: amount, provider: driver.name, providerRef: invoice.id, method: 'card',
-      paidAt: unixToIso(invoice.status_transitions?.paid_at) || undefined,
+      paidAt: unixToIso(invoice.status_transitions?.paid_at) || undefined, paymentIntent,
     },
   });
+  if (paymentIntent) {
+    // A replay (Check with Stripe) can name the payment intent of a row
+    // first recorded without it.
+    await env.DB.prepare(`UPDATE payments SET payment_intent = ?2 WHERE provider_ref = ?1 AND payment_intent IS NULL`)
+      .bind(invoice.id, paymentIntent).run();
+  }
   await afterConfirm(env, bookingId, result);
   if (result.ok) await updatePlanProgress(env, bookingId);
 }
@@ -394,28 +431,41 @@ async function onSubscriptionDeleted(env, subscription) {
   await safely('attention_email_failed', notifyAttention(env, bookingId, 'plan_ended_short'));
 }
 
+// The ledger rows for refunds Stripe lists (one row per refund id, so the
+// webhook and Check with Stripe can never record one twice).
+export function refundStatements(env, { bookingId, refunds, provider, paymentIntent = null, now = nowIso() }) {
+  const statements = [];
+  for (const refund of refunds || []) {
+    if (!refund || typeof refund.id !== 'string' || !Number.isInteger(refund.amount) || refund.amount <= 0) continue;
+    if (refund.status === 'failed' || refund.status === 'canceled') continue;
+    statements.push(paymentInsertStatement(env, {
+      bookingId, kind: 'refund', amountCents: -refund.amount, provider, providerRef: refund.id,
+      method: 'card', note: 'Refunded in Stripe', paidAt: unixToIso(refund.created) || now, now,
+      paymentIntent: idOf(refund.payment_intent) || refund.paymentIntent || paymentIntent,
+    }));
+  }
+  return statements;
+}
+
 async function onChargeRefunded(env, charge) {
-  const bookingId = await bookingForCharge(env, charge);
+  const driver = getPaymentsDriver(env);
+  const bookingId = await bookingForCharge(env, charge, driver);
   if (!bookingId) {
     logEvent('webhook_refund_unmatched', { charge: String(charge?.id || '').slice(0, 16) });
     return;
   }
-  const driver = getPaymentsDriver(env);
   const now = nowIso();
-  const statements = [];
-  const refunds = Array.isArray(charge.refunds?.data) ? charge.refunds.data : null;
+  const paymentIntent = idOf(charge.payment_intent);
+  let statements = [];
+  // Since API 2022-11-15 the charge's refund list is not in the event: ask
+  // Stripe for the payment intent's refunds (a failure throws, so the event
+  // is retried). Only a driver that keeps no refunds (the mock) answers
+  // null — then the charge's cumulative refunded amount is recorded.
+  let refunds = Array.isArray(charge.refunds?.data) ? charge.refunds.data : null;
+  if (!refunds && paymentIntent) refunds = await driver.listRefunds({ paymentIntent });
   if (refunds) {
-    for (const refund of refunds) {
-      if (!refund || typeof refund.id !== 'string' || !Number.isInteger(refund.amount) || refund.amount <= 0) continue;
-      if (refund.status === 'failed' || refund.status === 'canceled') continue;
-      statements.push(paymentInsertStatement(env, {
-        bookingId, kind: 'refund', amountCents: -refund.amount, provider: driver.name, providerRef: refund.id,
-        method: 'card', note: 'Refunded in Stripe', paidAt: unixToIso(refund.created) || now, now,
-      }));
-    }
+    statements = refundStatements(env, { bookingId, refunds, provider: driver.name, paymentIntent, now });
   } else if (Number.isInteger(charge.amount_refunded) && typeof charge.id === 'string') {
-    // Newer API versions omit the refund list: record the change in the
-    // charge's cumulative refunded amount, keyed on that cumulative total.
     const prior = await env.DB.prepare(
       `SELECT COALESCE(-SUM(amount_cents), 0) AS refunded FROM payments
        WHERE booking_id = ?1 AND kind = 'refund' AND provider_ref LIKE ?2`,
@@ -425,12 +475,14 @@ async function onChargeRefunded(env, charge) {
       statements.push(paymentInsertStatement(env, {
         bookingId, kind: 'refund', amountCents: -delta, provider: driver.name,
         providerRef: `${charge.id}:refunded:${charge.amount_refunded}`, method: 'card', note: 'Refunded in Stripe', now,
+        paymentIntent,
       }));
     }
   }
   if (!statements.length) return;
-  await env.DB.batch([...statements, recomputeStatement(env, bookingId)]);
-  logEvent('refund_recorded', { booking_id: bookingId.slice(0, 8) });
+  const results = await env.DB.batch([...statements, recomputeStatement(env, bookingId)]);
+  const added = results.slice(0, statements.length).filter((r) => r.meta.changes > 0).length;
+  if (added) logEvent('refund_recorded', { booking_id: bookingId.slice(0, 8), refunds: added });
 }
 
 const HANDLERS = {

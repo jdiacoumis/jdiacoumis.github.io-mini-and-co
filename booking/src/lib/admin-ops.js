@@ -1275,11 +1275,16 @@ export async function voucherInUse(env, code) {
 
 // Post-redirect-get notices: only allow-listed keys are ever shown, so nothing
 // from the query string is reflected into the page.
+// `also` adds a second allow-listed notice (e.g. "refunds added" after a
+// Check with Stripe).
 export function noticeFor(req, notices = {}, errors = {}) {
   const params = new URL(req.url).searchParams;
-  const ok = notices[params.get('ok')];
-  const err = errors[params.get('err')];
+  const pick = (map, key) => (key && Object.hasOwn(map, key) ? map[key] : null);
+  const ok = pick(notices, params.get('ok'));
+  const also = params.get('also') !== params.get('ok') ? pick(notices, params.get('also')) : null;
+  const err = pick(errors, params.get('err'));
   return html`${ok ? html`<p class="form-notice" role="status">${ok}</p>` : ''}${
+    also ? html`<p class="form-notice" role="status">${also}</p>` : ''}${
     err ? html`<p class="form-error" role="alert">${err}</p>` : ''}`;
 }
 
