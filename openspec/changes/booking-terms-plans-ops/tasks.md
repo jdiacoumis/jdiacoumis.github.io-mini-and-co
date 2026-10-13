@@ -20,10 +20,10 @@
 ## 2. Features (Phase 2 — three agents in parallel worktrees)
 
 ### 2A Parent flow (owns `routes/booking.js`, `routes/account.js`, `routes/waitlist.js`, `lib/emails/parent.js`, `js/booking-*.js`, parent section of `css/booking.css`)
-- [ ] 2A.1 Class list: terms with term price, "join for the remaining N weeks" pro-rata once started, casual per-session, one trial per child per class, returning-family window and price, opening times honoured, waitlist join when a term has no seat
-- [ ] 2A.2 Checkout: pay in full or instalment plan (schedule shown), voucher field, credits auto-applied, zero-balance confirms without payment, pending-with-pay-later bookings show "Pay now"
-- [ ] 2A.3 Confirmation and account: payment status, instalments paid/next charge, "Update card" via billing portal, credits balance, waitlist entries, booking history; Purchase once
-- [ ] 2A.4 Emails: confirmation with plan schedule; trial follow-up offer the day after the trial (cron job registered via `lib/cron.js`)
+- [x] 2A.1 Class list: terms with term price, "join for the remaining N weeks" pro-rata once started, casual per-session, one trial per child per class, returning-family window and price, opening times honoured, waitlist join when a term has no seat
+- [x] 2A.2 Checkout: pay in full or instalment plan (schedule shown), voucher field, credits auto-applied, zero-balance confirms without payment, pending-with-pay-later bookings show "Pay now"
+- [x] 2A.3 Confirmation and account: payment status, instalments paid/next charge, "Update card" via billing portal, credits balance, waitlist entries, booking history; Purchase once
+- [x] 2A.4 Emails: confirmation with plan schedule; trial follow-up offer the day after the trial (cron job registered via `lib/cron.js`)
 
 ### 2B Admin operations (owns `routes/admin.js`, `routes/admin-bookings.js`, `routes/admin-terms.js`, `routes/admin-ops.js`, `routes/admin-import.js`, `lib/admin-ops.js`, `lib/csv.js`, admin section of `css/booking.css`)
 - [x] 2B.1 Terms: create (dates, weeks, holiday skip dates, prices, plan options, opening windows) generating sessions; edit term and sessions later (add/remove weeks, change prices for future bookings only); close
