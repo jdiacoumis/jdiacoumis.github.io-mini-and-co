@@ -1,8 +1,11 @@
 // Notifications (design D10): every email the system sends goes through
 // sendTemplate(), which writes email_log. A dedupe key makes a send
 // idempotent — scheduled jobs and webhook retries can run again safely and a
-// family never gets the same email twice. A failed send is logged as 'failed'
-// and may be retried by the next run.
+// family never gets the same email twice. The row is claimed as 'pending'
+// before sending and becomes 'sent' or 'failed' after (review: it used to
+// say 'sent' before the send). A failed send — or one still 'pending' after
+// PENDING_RETRY_SECS (the request died part-way) — is retried by the next
+// call with its key.
 //
 // Family notices (Phase 2C): notifySessionCancelled() emails every family
 // booked into a cancelled session (with the credit they were given) and sends
@@ -27,10 +30,14 @@ import { ownerAlertEmail, attentionEmail } from './emails/core.js';
 import { bookingConfirmationEmail } from './emails/parent.js';
 import { sessionCancelled, planFailed } from './emails/ops.js';
 
+export const PENDING_RETRY_SECS = 10 * 60;
+
 // Send one templated email and log it.
 //   template: short name for the log ('booking_confirmed', 'reminder', …)
 //   dedupeKey: e.g. 'reminder:<session>:<booking>' — a second call with the
-//              same key is skipped (unless the first attempt failed)
+//              same key is skipped while the first is sent or still being
+//              sent (pending, under ten minutes); a failed or abandoned
+//              attempt is retried
 //   replyTo:   where replies go; omitted → the owner (EMAIL_REPLY_TO, else
 //              the first ADMIN_EMAILS address — lib/email-driver.js)
 // Returns { sent: true, id } | { skipped: true } | { sent: false, error }.
@@ -47,24 +54,27 @@ export async function sendTemplate(env, {
   const claim = await env.DB.prepare(
     `INSERT INTO email_log (id, template, dedupe_key, to_email, user_id, booking_id, session_id, term_id,
                             subject, status, sent_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'sent', ?10)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10)
      ON CONFLICT(dedupe_key) DO NOTHING`,
   ).bind(id, template, dedupeKey, email, userId, bookingId, sessionId, termId, String(subject).slice(0, 200), now).run();
   if (claim.meta.changes === 0) {
-    // Already sent — unless the earlier attempt failed, in which case retry it.
+    // Already sent, or being sent right now — unless the earlier attempt
+    // failed or was abandoned part-way (still pending after ten minutes):
+    // then take it over and try again.
+    const abandoned = isoFromMs(Date.parse(now) - PENDING_RETRY_SECS * 1000);
     const retry = await env.DB.prepare(
-      `UPDATE email_log SET status = 'sent', error = NULL, sent_at = ?2
-       WHERE dedupe_key = ?1 AND status = 'failed' RETURNING id`,
-    ).bind(dedupeKey, now).first();
+      `UPDATE email_log SET status = 'pending', error = NULL, sent_at = ?2
+       WHERE dedupe_key = ?1 AND (status = 'failed' OR (status = 'pending' AND sent_at <= ?3)) RETURNING id`,
+    ).bind(dedupeKey, now, abandoned).first();
     if (!retry) return { skipped: true };
     id = retry.id;
   }
 
   try {
     const providerRef = await sendEmail(env, email, subject, text, String(htmlBody || ''), { replyTo });
-    if (providerRef) {
-      await env.DB.prepare(`UPDATE email_log SET provider_ref = ?2 WHERE id = ?1`).bind(id, String(providerRef)).run();
-    }
+    await env.DB.prepare(
+      `UPDATE email_log SET status = 'sent', provider_ref = ?2, error = NULL, sent_at = ?3 WHERE id = ?1`,
+    ).bind(id, providerRef ? String(providerRef) : null, nowIso()).run();
     logEvent('email_template_sent', { template, booking_id: bookingId ? bookingId.slice(0, 8) : null });
     return { sent: true, id };
   } catch (err) {

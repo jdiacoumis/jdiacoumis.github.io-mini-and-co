@@ -1113,9 +1113,20 @@ export async function dashboardCounts(env, now = nowIso()) {
 
 // --- Customers -----------------------------------------------------------------
 
+// A LIKE pattern matching `text` anywhere: escaped, and kept within D1's
+// 50-character limit on patterns (a longer search is trimmed — a D1 error
+// otherwise).
+export function containsPattern(text) {
+  for (let t = String(text || ''); t; t = t.slice(0, -1)) {
+    const pattern = `%${t.replace(/[%_\\]/g, (ch) => `\\${ch}`)}%`;
+    if (pattern.length <= 50) return pattern;
+  }
+  return '%';
+}
+
 export async function listCustomers(env, { query = '' } = {}) {
   const q = String(query || '').trim().toLowerCase().slice(0, 100);
-  const like = `%${q.replace(/[%_\\]/g, (ch) => `\\${ch}`)}%`;
+  const like = containsPattern(q);
   const rows = await env.DB.prepare(
     `SELECT u.id, u.name, u.email, u.phone, u.created_at,
             (SELECT GROUP_CONCAT(c.name || ' (' || c.dob || ')', '|')

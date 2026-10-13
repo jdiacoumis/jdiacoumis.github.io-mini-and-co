@@ -26,6 +26,7 @@ import { bookingLiveSql } from '../lib/domain.js';
 import { sendTemplate, tallySends } from '../lib/notify.js';
 import { bulk } from '../lib/emails/ops.js';
 import { logEvent } from '../lib/log.js';
+import { containsPattern } from '../lib/admin-ops.js';
 
 export const AUDIENCES = ['term', 'waitlist', 'all'];
 const AUDIENCE_LABELS = {
@@ -365,9 +366,9 @@ export async function handleEmailLog(req, env) {
   const termId = isValidId(termParam) ? termParam : null;
   const q = cleanText(url.searchParams.get('q'), 100).replace(/\s+/g, '').toLowerCase() || null;
   const statusParam = url.searchParams.get('status');
-  const status = statusParam === 'sent' || statusParam === 'failed' ? statusParam : null;
+  const status = ['sent', 'failed', 'pending'].includes(statusParam) ? statusParam : null;
   const page = parseIntInRange(url.searchParams.get('page') || '1', 1, 10000) || 1;
-  const like = q ? `%${q.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%` : null;
+  const like = q ? containsPattern(q) : null;
 
   const rows = (await env.DB.prepare(
     `SELECT el.id, el.template, el.to_email, el.subject, el.status, el.error, el.sent_at,
@@ -406,7 +407,9 @@ export async function handleEmailLog(req, env) {
       <td data-label="To">${r.to_email}</td>
       <td data-label="Email">${templateLabel(r.template)}<br><span class="muted">${r.subject}</span></td>
       <td data-label="Term">${r.term_name ? html`${r.class_name} — ${r.term_name}` : '—'}</td>
-      <td data-label="Status">${r.status === 'sent' ? 'Sent' : html`<span class="email-status-failed">Failed</span>${r.error ? html`<br><span class="muted">${r.error}</span>` : ''}`}</td>
+      <td data-label="Status">${r.status === 'sent' ? 'Sent' : r.status === 'pending'
+    ? html`<span class="muted">Sending — not confirmed yet</span>`
+    : html`<span class="email-status-failed">Failed</span>${r.error ? html`<br><span class="muted">${r.error}</span>` : ''}`}</td>
     </tr>
   `);
 
@@ -434,9 +437,10 @@ export async function handleEmailLog(req, env) {
         </label>
         <label>Status
           <select name="status">
-            <option value="">Sent or failed</option>
+            <option value="">Any</option>
             <option value="sent" ${status === 'sent' ? 'selected' : ''}>Sent</option>
             <option value="failed" ${status === 'failed' ? 'selected' : ''}>Failed</option>
+            <option value="pending" ${status === 'pending' ? 'selected' : ''}>Not confirmed yet</option>
           </select>
         </label>
         <button type="submit">Show</button>
