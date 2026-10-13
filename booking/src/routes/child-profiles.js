@@ -247,3 +247,13 @@ export async function handleDeleteChildPost(req, env, params) {
   logEvent('child_archived', { child_id: child.id.slice(0, 8) });
   return redirect('/account/children', 303);
 }
+
+export function registerRoutes(route) {
+  route('GET', '/account/children', handleListChildren);
+  route('GET', '/account/children/new', handleAddChild);
+  route('POST', '/account/children/new', handleAddChildPost);
+  route('GET', '/account/children/:id/edit', handleEditChild);
+  route('POST', '/account/children/:id/edit', handleEditChildPost);
+  route('GET', '/account/children/:id/delete', handleDeleteChild);
+  route('POST', '/account/children/:id/delete', handleDeleteChildPost);
+}
