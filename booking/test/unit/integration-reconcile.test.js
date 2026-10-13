@@ -6,8 +6,10 @@
 import { test, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTestDb, seedFamilyAndTerm } from './helpers.js';
-import { getPaymentsDriver } from '../../src/lib/payments-driver.js';
-import { prepareBooking, createPendingBooking, attachPaymentRef, confirmBooking } from '../../src/lib/domain.js';
+import { getPaymentsDriver, checkoutParams } from '../../src/lib/payments-driver.js';
+import {
+  prepareBooking, createPendingBooking, attachPaymentRef, confirmBooking, abandonCheckout,
+} from '../../src/lib/domain.js';
 import { processStripeEvent } from '../../src/routes/webhooks.js';
 import { checkWithStripe, reconcileInstalments, CHECK_NOTICES } from '../../src/routes/admin-ops.js';
 
@@ -22,7 +24,10 @@ function stubStripe(routes) {
   const calls = [];
   globalThis.fetch = async (url, init = {}) => {
     const u = new URL(String(url));
-    calls.push({ path: u.pathname, query: u.searchParams, method: init.method || 'GET', auth: init.headers?.Authorization });
+    calls.push({
+      path: u.pathname, query: u.searchParams, method: init.method || 'GET', auth: init.headers?.Authorization,
+      body: init.body ? new URLSearchParams(init.body) : null,
+    });
     const route = routes.find((r) => r.method === (init.method || 'GET') && r.path === u.pathname);
     const body = route ? route.body(u) : { error: { code: 'resource_missing' } };
     return new Response(JSON.stringify(body), { status: route ? 200 : 404, headers: { 'Content-Type': 'application/json' } });
@@ -160,4 +165,72 @@ test('the mock driver lists the dev outbox, so a lost mock webhook reconciles to
   assert.equal(await reconcileInstalments(devEnv, plan.id), 1);
   assert.equal(await reconcileInstalments(devEnv, plan.id), 0);
   assert.deepEqual((await instalments(plan.id)).map((r) => r.provider_ref), ['in_rc-mock_1', 'in_rc-mock_2']);
+});
+
+// --- A plan the booking forgot still gets its end date -----------------------
+
+test('the plan rides on the subscription, so a plan whose booking forgot it still ends after n payments', async () => {
+  const params = checkoutParams(stripeEnv, {
+    bookingId: 'b-plan', description: 'Term', mode: 'subscription', plan: { n: 4, eachCents: 3000, firstCents: 3000, interval: 'week' },
+  });
+  assert.equal(params.get('subscription_data[metadata][plan_instalments]'), '4');
+  assert.equal(params.get('subscription_data[metadata][plan_interval]'), 'week');
+  assert.equal(params.get('subscription_data[metadata][plan_instalment_cents]'), '3000');
+
+  const fam = await seedFamilyAndTerm(devEnv, { prefix: 'rc-forgot', weeks: 4, termPrice: 12000, planInstalments: 4 });
+  const prepared = await prepareBooking(devEnv, {
+    userId: fam.userId, childId: fam.childId, kind: 'term', termId: fam.termId, paymentChoice: 'plan',
+  });
+  const created = await createPendingBooking(devEnv, {
+    userId: fam.userId, childId: fam.childId, kind: 'term', termId: fam.termId, sessionIds: prepared.quote.sessionIds,
+    quote: prepared.quote, expiresAt: new Date(Date.now() + 3 * 86400e3).toISOString().replace(/\.\d{3}Z$/, 'Z'),
+  });
+  await attachPaymentRef(devEnv, created.id, 'stripe', 'cs_rcforgot');
+  assert.equal(await abandonCheckout(devEnv, created.id, 'cs_rcforgot'), 'detached');
+  assert.equal((await devEnv.DB.prepare(`SELECT plan_instalments FROM bookings WHERE id = ?1`).bind(created.id).first()).plan_instalments, null);
+
+  // …but that checkout completes after all (it could not, once expired at
+  // Stripe — this is the safety net).
+  const calls = stubStripe([
+    {
+      method: 'GET', path: '/v1/subscriptions/sub_rcforgot',
+      body: () => ({
+        id: 'sub_rcforgot', status: 'active', billing_cycle_anchor: 1800000000,
+        metadata: { booking_id: created.id, plan_instalments: '4', plan_interval: 'week', plan_instalment_cents: '3000' },
+      }),
+    },
+    { method: 'POST', path: '/v1/subscriptions/sub_rcforgot', body: () => ({ id: 'sub_rcforgot', cancel_at: 1802419200 }) },
+  ]);
+  await processStripeEvent(stripeEnv, {
+    type: 'checkout.session.completed',
+    data: { object: { id: 'cs_rcforgot', mode: 'subscription', status: 'complete', payment_status: 'paid', subscription: 'sub_rcforgot', client_reference_id: created.id } },
+  });
+  const cancelAt = calls.find((c) => c.method === 'POST');
+  assert.equal(cancelAt?.body.get('cancel_at'), String(1800000000 + 4 * 7 * 86400), 'ends after the 4th weekly period');
+  const row = await devEnv.DB.prepare(
+    `SELECT status, payment_method, plan_instalments, plan_interval, plan_instalment_cents, stripe_subscription_id FROM bookings WHERE id = ?1`,
+  ).bind(created.id).first();
+  assert.deepEqual(row, {
+    status: 'confirmed', payment_method: 'plan', plan_instalments: 4, plan_interval: 'week', plan_instalment_cents: 3000,
+    stripe_subscription_id: 'sub_rcforgot',
+  });
+});
+
+test('a subscription with no plan anywhere is flagged for the owner instead of running unnoticed', async () => {
+  const fam = await seedFamilyAndTerm(devEnv, { prefix: 'rc-noplan' });
+  const prepared = await prepareBooking(devEnv, { userId: fam.userId, childId: fam.childId, kind: 'term', termId: fam.termId });
+  const created = await createPendingBooking(devEnv, {
+    userId: fam.userId, childId: fam.childId, kind: 'term', termId: fam.termId, sessionIds: prepared.quote.sessionIds, quote: prepared.quote,
+  });
+  await attachPaymentRef(devEnv, created.id, 'stripe', 'cs_rcnoplan');
+  const calls = stubStripe([
+    { method: 'GET', path: '/v1/subscriptions/sub_rcnoplan', body: () => ({ id: 'sub_rcnoplan', status: 'active', metadata: { booking_id: created.id } }) },
+  ]);
+  await processStripeEvent(stripeEnv, {
+    type: 'checkout.session.completed',
+    data: { object: { id: 'cs_rcnoplan', mode: 'subscription', status: 'complete', payment_status: 'paid', subscription: 'sub_rcnoplan', client_reference_id: created.id } },
+  });
+  assert.equal(calls.filter((c) => c.method === 'POST').length, 0);
+  const row = await devEnv.DB.prepare(`SELECT needs_attention FROM bookings WHERE id = ?1`).bind(created.id).first();
+  assert.equal(row.needs_attention, 'webhook_mismatch');
 });

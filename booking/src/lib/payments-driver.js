@@ -178,6 +178,12 @@ export function checkoutParams(env, {
       params.set('line_items[1][quantity]', '1');
     }
     params.set('subscription_data[metadata][booking_id]', bookingId);
+    // The plan travels with the subscription too, so the webhook can always
+    // give it its end date (cancel_at) — even if the booking's own copy of
+    // the plan was cleared when an earlier checkout was abandoned.
+    params.set('subscription_data[metadata][plan_instalments]', String(plan.n));
+    params.set('subscription_data[metadata][plan_interval]', plan.interval);
+    params.set('subscription_data[metadata][plan_instalment_cents]', String(plan.eachCents));
   } else {
     throw new Error(`Unknown checkout mode: ${mode}`);
   }

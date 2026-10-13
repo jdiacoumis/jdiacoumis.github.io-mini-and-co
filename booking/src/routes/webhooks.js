@@ -172,6 +172,24 @@ async function bookingForCharge(env, charge) {
   return null;
 }
 
+// The plan a subscription was created for (checkoutParams puts it in the
+// subscription's metadata), written back onto a booking that lost its copy.
+// Returns { plan_instalments, plan_interval } or null.
+async function restorePlanFromSubscription(env, bookingId, sub) {
+  const meta = sub?.metadata || {};
+  const n = Number(meta.plan_instalments);
+  const each = Number(meta.plan_instalment_cents);
+  const interval = meta.plan_interval;
+  if (!Number.isInteger(n) || n < 2 || n > 20 || !['week', 'fortnight'].includes(interval)
+    || !Number.isInteger(each) || each <= 0 || each > 1000000) return null;
+  await env.DB.prepare(
+    `UPDATE bookings SET payment_method = 'plan', plan_instalments = ?2, plan_interval = ?3, plan_instalment_cents = ?4
+     WHERE id = ?1 AND (plan_instalments IS NULL OR plan_instalments < 2)`,
+  ).bind(bookingId, n, interval, each).run();
+  logEvent('plan_restored_from_subscription', { booking_id: bookingId.slice(0, 8) });
+  return { plan_instalments: n, plan_interval: interval };
+}
+
 // After a confirmation attempt: email the family once, alert the owner when
 // money landed somewhere it should not have.
 async function afterConfirm(env, bookingId, result) {
@@ -212,15 +230,29 @@ async function onCheckoutCompleted(env, session) {
   if (session.mode === 'subscription') {
     const subscriptionId = idOf(session.subscription);
     if (!subscriptionId) throw new Error('Subscription checkout completed without a subscription id');
-    const plan = await env.DB.prepare(
+    let plan = await env.DB.prepare(
       `SELECT plan_instalments, plan_interval FROM bookings WHERE id = ?1`,
     ).bind(bookingId).first();
+    const sub = await driver.retrieveSubscription(subscriptionId);
+    if (plan && !(plan.plan_instalments >= 2)) {
+      // The booking forgot its plan (an earlier checkout was abandoned): a
+      // subscription that completes anyway is still a plan — restore it from
+      // the subscription's metadata, or it would never be given an end.
+      const restored = await restorePlanFromSubscription(env, bookingId, sub);
+      if (restored) plan = restored;
+    }
     if (plan && plan.plan_instalments >= 2) {
       // Exactly n invoices: cancel at the end of the n-th billing period.
-      const sub = await driver.retrieveSubscription(subscriptionId);
       const anchor = sub.billingCycleAnchor || sub.startDate || Math.floor(Date.now() / 1000);
       const cancelAt = planCancelAt(anchor, plan.plan_instalments, plan.plan_interval || 'week');
       if (sub.cancelAt !== cancelAt) await driver.setSubscriptionCancelAt(subscriptionId, cancelAt);
+    } else {
+      // No plan anywhere: never leave a subscription running unnoticed.
+      logEvent('subscription_without_plan', { booking_id: bookingId.slice(0, 8) });
+      await flagStatement(env, bookingId, 'webhook_mismatch', { overwrite: false }).run();
+      await safely('attention_email_failed', notifyAttention(env, bookingId, 'webhook_mismatch', {
+        detail: 'Stripe started an instalment plan for this booking without the plan details — check the subscription in Stripe and set its end date.',
+      }));
     }
     // The ledger row arrives with the first invoice's invoice.paid.
     const result = await confirmBooking(env, bookingId, { provider: driver.name, paymentRef: session.id, subscriptionId });
