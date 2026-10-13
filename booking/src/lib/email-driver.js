@@ -5,8 +5,9 @@
 // ENVIRONMENT=development — so a misconfigured deploy fails loudly instead of
 // "sending" magic links into a table nobody reads.
 //
-// Logging is PII-safe: masked recipient, truncated subject, never the body
-// (magic links carry sign-in tokens).
+// Logging is PII-safe: masked recipient and provider only — never the body
+// (magic links carry sign-in tokens) or the subject (subjects can carry a
+// child's name).
 
 import { logEvent, logError, maskEmail } from './log.js';
 import { nowIso } from './db.js';
@@ -27,7 +28,7 @@ async function resendDriver(env, to, subject, bodyText, bodyHtml) {
     throw new Error(`Resend failed (HTTP ${response.status})`);
   }
   const data = await response.json();
-  logEvent('email_sent', { to: maskEmail(to), subject: subject.slice(0, 50), provider: 'resend' });
+  logEvent('email_sent', { to: maskEmail(to), provider: 'resend' });
   return data.id || null;
 }
 
@@ -37,7 +38,7 @@ async function consoleDriver(env, to, subject, bodyText, bodyHtml) {
     `INSERT INTO dev_emails (to_email, subject, body_text, body_html, created_at)
      VALUES (?1, ?2, ?3, ?4, ?5)`,
   ).bind(to, subject, bodyText, bodyHtml, nowIso()).run();
-  logEvent('email_sent', { to: maskEmail(to), subject: subject.slice(0, 50), provider: 'console' });
+  logEvent('email_sent', { to: maskEmail(to), provider: 'console' });
   return `dev-${result.meta.last_row_id}`;
 }
 
@@ -60,7 +61,7 @@ export async function sendEmail(env, to, subject, bodyText, bodyHtml = '') {
   try {
     return await driver(env, to, subject, bodyText, htmlBody);
   } catch (err) {
-    logError('email_send_failed', err, { to: maskEmail(to), subject: String(subject).slice(0, 50) });
+    logError('email_send_failed', err, { to: maskEmail(to) });
     throw err;
   }
 }
