@@ -5,8 +5,10 @@
 //     price, then record an offline payment now, hold the place for a week
 //     with a pay-later email, or book it complimentary;
 //   * Needs attention (/admin/attention) with "Check with Stripe" (the
-//     provider's record is replayed through the SAME webhook handler, so the
-//     confirmation is capacity-guarded and the ledger row idempotent),
+//     provider's record is replayed through the SAME webhook handlers, so the
+//     confirmation is capacity-guarded and the ledger rows idempotent — an
+//     instalment plan's paid invoices are listed and replayed too, so
+//     instalments whose webhooks were lost reach the ledger),
 //     resolve-with-note, and links to record a payment or cancel;
 //   * attendance on the roster — the one write a facilitator (staff) may make;
 //   * credits (list, issue, void) and vouchers (create, edit, disable, delete).
@@ -28,7 +30,7 @@ import {
   getBooking, loadTerm, listSessionsWithFullness, listOneOffSessions, prepareBooking, abandonCheckout,
   formatAud, KIND_LABELS, NEEDS_ATTENTION_LABELS, effectiveStatus,
 } from '../lib/domain.js';
-import { issueCredit, voidCredit } from '../lib/ledger.js';
+import { issueCredit, voidCredit, ledgerTotals } from '../lib/ledger.js';
 import { normaliseVoucherCode } from '../lib/pricing.js';
 import { getPaymentsDriver } from '../lib/payments-driver.js';
 import { sendTemplate, notifyBookingConfirmed } from '../lib/notify.js';
@@ -494,7 +496,7 @@ export async function handleAdminNewBookingDetailsPost(req, env) {
 
 export const CHECK_NOTICES = {
   'check-confirmed': 'Stripe says it is paid — the booking is confirmed and the payment is in the ledger.',
-  'check-confirmed-plan': 'Stripe says the instalment plan started — the booking is confirmed. Instalments appear in the ledger as Stripe reports them; if one never appears, record it as an offline payment.',
+  'check-confirmed-plan': 'Stripe says the instalment plan started — the booking is confirmed, and every instalment Stripe has collected so far is in the ledger.',
   'check-paid-no-seat': 'Stripe says it is paid, but there is no free seat any more. Free a seat (or raise the session capacity) and check again — or cancel the booking and refund it in Stripe.',
   'check-paid-cancelled': 'Stripe says it is paid, but the booking was cancelled. The payment is recorded — refund it in Stripe, or restore the booking.',
   'check-open': 'Stripe says the family has not finished paying — the checkout is still open.',
@@ -518,14 +520,76 @@ const PLAN_STATUS_NOTICES = {
   active: 'check-plan-active', past_due: 'check-plan-past-due', unpaid: 'check-plan-unpaid', canceled: 'check-plan-ended',
 };
 
+// "…-added": the same plan notice, after instalments Stripe had collected
+// but the ledger was missing (lost webhooks) were added just now.
+const INSTALMENTS_ADDED = 'Instalments Stripe had collected that were missing here have been added to the ledger.';
+for (const key of [...Object.values(PLAN_STATUS_NOTICES), 'check-plan-other']) {
+  CHECK_NOTICES[`${key}-added`] = `${CHECK_NOTICES[key]} ${INSTALMENTS_ADDED}`;
+}
+
+// Bring a confirmed plan's ledger up to date with Stripe (D5/D6): every paid
+// invoice of its subscription is replayed through the webhook's own
+// invoice.paid handler. Ledger rows are keyed on the invoice id, so an
+// instalment already recorded adds nothing — only ones whose webhook was
+// lost. Returns the number of instalment rows added, or null when Stripe
+// could not be asked.
+export async function reconcileInstalments(env, bookingId) {
+  const booking = await env.DB.prepare(
+    `SELECT id, status, payment_method, stripe_subscription_id FROM bookings WHERE id = ?1`,
+  ).bind(bookingId).first();
+  if (!booking || booking.status !== 'confirmed' || booking.payment_method !== 'plan' || !booking.stripe_subscription_id) {
+    return 0;
+  }
+  let invoices;
+  try {
+    invoices = await getPaymentsDriver(env).listInvoices(booking.stripe_subscription_id);
+  } catch (err) {
+    logError('check_invoices_failed', err, { booking_id: booking.id.slice(0, 8) });
+    return null;
+  }
+  const paid = invoices
+    .filter((inv) => inv.status === 'paid' && inv.amountPaid > 0
+      && (!inv.subscriptionId || inv.subscriptionId === booking.stripe_subscription_id)
+      && (!inv.bookingId || inv.bookingId === booking.id))
+    .sort((a, b) => (a.paidAt ?? 0) - (b.paidAt ?? 0));
+  const before = (await ledgerTotals(env, booking.id)).instalments_paid;
+  for (const inv of paid) {
+    await processStripeEvent(env, {
+      type: 'invoice.paid',
+      data: {
+        object: {
+          id: inv.id, object: 'invoice', status: 'paid', amount_paid: inv.amountPaid, amount_due: inv.amountDue,
+          status_transitions: { paid_at: inv.paidAt }, customer: inv.customerId,
+          parent: {
+            subscription_details: { subscription: booking.stripe_subscription_id, metadata: { booking_id: booking.id } },
+          },
+        },
+      },
+    });
+  }
+  const added = (await ledgerTotals(env, booking.id)).instalments_paid - before;
+  if (added > 0) logEvent('instalments_reconciled', { booking_id: booking.id.slice(0, 8), added });
+  return added;
+}
+
 async function checkPlanStatus(env, booking) {
+  let added = 0;
+  try {
+    added = await reconcileInstalments(env, booking.id);
+  } catch (err) {
+    logError('check_instalments_failed', err, { booking_id: booking.id.slice(0, 8) });
+    return 'check-failed';
+  }
+  if (added === null) return 'check-failed';
+  let key;
   try {
     const sub = await getPaymentsDriver(env).retrieveSubscription(booking.stripe_subscription_id);
-    return Object.hasOwn(PLAN_STATUS_NOTICES, sub.status) ? PLAN_STATUS_NOTICES[sub.status] : 'check-plan-other';
+    key = Object.hasOwn(PLAN_STATUS_NOTICES, sub.status) ? PLAN_STATUS_NOTICES[sub.status] : 'check-plan-other';
   } catch (err) {
     logError('check_plan_failed', err, { booking_id: booking.id.slice(0, 8) });
     return 'check-failed';
   }
+  return added > 0 ? `${key}-added` : key;
 }
 
 // Ask the provider about a booking's checkout and reconcile (D6): a paid
@@ -573,7 +637,16 @@ export async function checkWithStripe(env, booking) {
     if (after.status === 'confirmed') {
       await clearFlagIf(env, booking.id, ['paid_no_seat'],
         `${formatSydney(nowIso(), 'date')}: Check with Stripe — paid; booking confirmed.`);
-      return checkout.mode === 'subscription' ? 'check-confirmed-plan' : 'check-confirmed';
+      if (checkout.mode !== 'subscription') return 'check-confirmed';
+      // The plan's instalments, including the first, come with invoice
+      // events — which may have been lost along with the checkout's.
+      try {
+        if ((await reconcileInstalments(env, booking.id)) === null) return 'check-failed';
+      } catch (err) {
+        logError('check_instalments_failed', err, { booking_id: booking.id.slice(0, 8) });
+        return 'check-failed';
+      }
+      return 'check-confirmed-plan';
     }
     return after.status === 'cancelled' ? 'check-paid-cancelled' : 'check-paid-no-seat';
   }

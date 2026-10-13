@@ -15,6 +15,11 @@
 //                                billingCycleAnchor, cancelAt, currentPeriodEnd, metadata }
 //   setSubscriptionCancelAt(id, unixSeconds)           → { id, cancelAt }
 //   cancelSubscription(id)                             → { id, status }
+//   listInvoices(subscriptionId, { limit })  → [{ id, status, amountPaid,
+//                              amountDue, paidAt (unix), attemptCount,
+//                              subscriptionId, bookingId, customerId }],
+//                              newest first (Check with Stripe replays the
+//                              paid ones when invoice.paid webhooks were lost)
 //   createBillingPortalSession(customerId, returnUrl)  → url
 //   verifyWebhook(signatureHeader, rawBody)            → event (or throws)
 
@@ -62,7 +67,7 @@ async function stripeRequest(env, method, path, params = null) {
       const body = await response.json();
       code = String(body?.error?.code || body?.error?.type || '').slice(0, 60);
     } catch { /* not JSON */ }
-    const err = new Error(`Stripe ${method} ${path.split('/').slice(0, 3).join('/')} failed (HTTP ${response.status}${code ? `, ${code}` : ''})`);
+    const err = new Error(`Stripe ${method} ${path.split('?')[0].split('/').slice(0, 3).join('/')} failed (HTTP ${response.status}${code ? `, ${code}` : ''})`);
     err.status = response.status;
     err.code = code;
     throw err;
@@ -93,6 +98,31 @@ function normaliseSubscription(sub) {
     cancelAt: sub.cancel_at ?? null,
     currentPeriodEnd: sub.current_period_end ?? sub.items?.data?.[0]?.current_period_end ?? null,
     metadata: sub.metadata || {},
+  };
+}
+
+// An invoice → the driver's shape. The subscription (and the booking id we
+// put in its metadata) sit under `parent.subscription_details` in current API
+// versions and at the top level in older ones.
+function normaliseInvoice(invoice) {
+  const details = invoice?.parent?.subscription_details || invoice?.subscription_details || null;
+  let bookingId = details?.metadata?.booking_id || null;
+  if (!bookingId) {
+    for (const line of invoice?.lines?.data || []) {
+      if (line?.metadata?.booking_id) { bookingId = line.metadata.booking_id; break; }
+    }
+  }
+  const whole = (n) => (Number.isInteger(n) ? n : 0);
+  return {
+    id: typeof invoice?.id === 'string' ? invoice.id : null,
+    status: invoice?.status || null,                 // draft | open | paid | uncollectible | void
+    amountPaid: whole(invoice?.amount_paid),
+    amountDue: whole(invoice?.amount_due),
+    paidAt: Number.isInteger(invoice?.status_transitions?.paid_at) ? invoice.status_transitions.paid_at : null,
+    attemptCount: whole(invoice?.attempt_count),
+    subscriptionId: idOf(details?.subscription) || idOf(invoice?.subscription) || null,
+    bookingId: typeof bookingId === 'string' ? bookingId : null,
+    customerId: idOf(invoice?.customer),
   };
 }
 
@@ -195,6 +225,17 @@ function stripeDriver(env) {
       return { id: sub.id, status: sub.status };
     },
 
+    // A plan has at most 20 instalments (terms.plan_instalments), so one page
+    // of up to 100 invoices holds them all.
+    async listInvoices(subscriptionId, { limit = 100 } = {}) {
+      const query = new URLSearchParams({
+        subscription: stripeId(subscriptionId, 'subscription'),
+        limit: String(Math.max(1, Math.min(100, Math.floor(Number(limit) || 100)))),
+      });
+      const list = await stripeRequest(env, 'GET', `/invoices?${query}`);
+      return (Array.isArray(list?.data) ? list.data : []).map(normaliseInvoice).filter((i) => i.id);
+    },
+
     async createBillingPortalSession(customerId, returnUrl) {
       const params = new URLSearchParams({ customer: stripeId(customerId, 'customer'), return_url: returnUrl });
       const session = await stripeRequest(env, 'POST', '/billing_portal/sessions', params);
@@ -241,7 +282,9 @@ function stripeDriver(env) {
 // the booking is confirmed — so it behaves like Stripe for the code paths
 // that ask (cancel page, Check with Stripe). The dev page /dev/mock-checkout
 // plays the hosted page and posts synthetic events through the same webhook
-// processing as production (routes/dev.js).
+// processing as production (routes/dev.js); the instalments it "charges" are
+// kept in the dev_mock_invoices outbox, which listInvoices() reads — so a
+// lost invoice.paid webhook can be simulated and reconciled.
 function mockDriver(env) {
   // Security: fail-closed — the mock confirms bookings without payment, so it
   // loads only when the environment is EXPLICITLY development.
@@ -320,6 +363,17 @@ function mockDriver(env) {
     async cancelSubscription(id) {
       logEvent('mock_subscription_cancelled', { subscription: String(id).slice(0, 16) });
       return { id, status: 'canceled' };
+    },
+
+    async listInvoices(subscriptionId, { limit = 100 } = {}) {
+      const rows = (await env.DB.prepare(
+        `SELECT id, subscription_id, booking_id, status, amount_paid, amount_due, attempt_count, paid_at
+         FROM dev_mock_invoices WHERE subscription_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT ?2`,
+      ).bind(String(subscriptionId), Math.max(1, Math.min(100, Math.floor(Number(limit) || 100)))).all()).results || [];
+      return rows.map((r) => ({
+        id: r.id, status: r.status, amountPaid: r.amount_paid, amountDue: r.amount_due, paidAt: r.paid_at,
+        attemptCount: r.attempt_count, subscriptionId: r.subscription_id, bookingId: r.booking_id, customerId: null,
+      }));
     },
 
     async createBillingPortalSession() {

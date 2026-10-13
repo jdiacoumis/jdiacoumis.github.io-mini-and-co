@@ -50,6 +50,29 @@ function invoice(booking, { amount, billingReason = 'subscription_cycle' }) {
   };
 }
 
+// Every instalment the mock "charges" (or fails to) goes in the
+// dev_mock_invoices outbox — what Stripe would list for the subscription —
+// whether or not its webhook event is then delivered. The mock driver's
+// listInvoices() reads it (Check with Stripe).
+async function recordMockInvoice(env, inv, { bookingId, subscriptionId, status = 'paid' }) {
+  await env.DB.prepare(
+    `INSERT INTO dev_mock_invoices (id, subscription_id, booking_id, status, amount_paid, amount_due, attempt_count,
+                                    paid_at, created_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+  ).bind(inv.id, subscriptionId, bookingId, status, status === 'paid' ? inv.amount_paid : 0, inv.amount_due,
+    inv.attempt_count || 0, status === 'paid' ? inv.status_transitions.paid_at : null, nowIso()).run();
+}
+
+// Instalments the mock subscription has charged so far.
+async function mockInstalmentsCharged(env, booking) {
+  const [dev, ledger] = await Promise.all([
+    env.DB.prepare(`SELECT COUNT(*) AS n FROM dev_mock_invoices WHERE subscription_id = ?1 AND status = 'paid'`)
+      .bind(booking.stripe_subscription_id).first(),
+    ledgerTotals(env, booking.id),
+  ]);
+  return Math.max(dev.n, ledger.instalments_paid);
+}
+
 async function runEvents(env, events) {
   for (const evt of events) {
     const { outcome } = await handleVerifiedEvent(env, evt);
@@ -97,6 +120,7 @@ export async function handleMockCheckout(req, env) {
         ${csrfField(user.csrfToken)}
         <input type="hidden" name="booking" value="${booking.id}">
         <button type="submit" name="outcome" value="instalment_paid">Simulate next instalment paid</button>
+        <button type="submit" name="outcome" value="instalment_paid_quietly" class="button-secondary">Simulate instalment paid, webhook lost</button>
         <button type="submit" name="outcome" value="instalment_failed" class="button-secondary">Simulate instalment failed</button>
         <button type="submit" name="outcome" value="plan_ended" class="button-secondary">Simulate plan ended</button>
       </form>
@@ -143,14 +167,16 @@ export async function handleMockCheckoutPost(req, env) {
     if (booking.payment_method === 'plan') {
       const schedule = instalmentSchedule(booking.amount_cents, booking.plan_instalments, booking.plan_interval || 'week', nowIso());
       const subscription = mockSubscriptionId(booking.id);
+      const first = invoice({ ...booking, stripe_subscription_id: subscription }, {
+        amount: schedule.firstCents, billingReason: 'subscription_create',
+      });
+      await recordMockInvoice(env, first, { bookingId: booking.id, subscriptionId: subscription });
       await runEvents(env, [
         event('checkout.session.completed', {
           id: ref, mode: 'subscription', status: 'complete', payment_status: 'paid', client_reference_id: booking.id,
           metadata: { booking_id: booking.id }, subscription, customer: null, amount_total: schedule.firstCents,
         }),
-        event('invoice.paid', invoice({ ...booking, stripe_subscription_id: subscription }, {
-          amount: schedule.firstCents, billingReason: 'subscription_create',
-        })),
+        event('invoice.paid', first),
       ]);
     } else {
       await runEvents(env, [event('checkout.session.completed', {
@@ -162,7 +188,7 @@ export async function handleMockCheckoutPost(req, env) {
     return redirect(`/book/confirm?booking=${booking.id}`, 303);
   }
 
-  if (!['instalment_paid', 'instalment_failed', 'plan_ended'].includes(outcome)) throw notFound();
+  if (!['instalment_paid', 'instalment_paid_quietly', 'instalment_failed', 'plan_ended'].includes(outcome)) throw notFound();
   if (booking.payment_method !== 'plan' || !booking.stripe_subscription_id) {
     throw new HttpError(409, 'That booking has no instalment plan.');
   }
@@ -171,18 +197,25 @@ export async function handleMockCheckoutPost(req, env) {
     id: booking.stripe_subscription_id, status: 'canceled', metadata: { booking_id: booking.id },
   });
 
-  if (outcome === 'instalment_paid') {
-    const { instalments_paid: paid } = await ledgerTotals(env, booking.id);
+  const ids = { bookingId: booking.id, subscriptionId: booking.stripe_subscription_id };
+  if (outcome === 'instalment_paid' || outcome === 'instalment_paid_quietly') {
+    const paid = await mockInstalmentsCharged(env, booking);
     if (paid < booking.plan_instalments) {
-      const events = [event('invoice.paid', invoice(booking, { amount: schedule.eachCents }))];
-      // Stripe cancels the subscription after the last instalment.
-      if (paid + 1 >= booking.plan_instalments) events.push(subscriptionDeleted);
-      await runEvents(env, events);
+      const next = invoice(booking, { amount: schedule.eachCents });
+      await recordMockInvoice(env, next, ids);
+      // "webhook lost": Stripe charged the card but the event never arrived
+      // (Check with Stripe finds it through listInvoices).
+      if (outcome === 'instalment_paid') {
+        const events = [event('invoice.paid', next)];
+        // Stripe cancels the subscription after the last instalment.
+        if (paid + 1 >= booking.plan_instalments) events.push(subscriptionDeleted);
+        await runEvents(env, events);
+      }
     }
   } else if (outcome === 'instalment_failed') {
-    await runEvents(env, [event('invoice.payment_failed', {
-      ...invoice(booking, { amount: 0 }), amount_due: schedule.eachCents, attempt_count: 1,
-    })]);
+    const failed = { ...invoice(booking, { amount: 0 }), amount_due: schedule.eachCents, attempt_count: 1 };
+    await recordMockInvoice(env, failed, { ...ids, status: 'open' });
+    await runEvents(env, [event('invoice.payment_failed', failed)]);
   } else {
     await runEvents(env, [subscriptionDeleted]);
   }
