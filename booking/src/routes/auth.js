@@ -17,7 +17,7 @@ import { nowIso, isoPlusSeconds, uuid } from '../lib/db.js';
 import { normaliseEmail, isValidEmail } from '../lib/validate.js';
 import { sendEmail } from '../lib/email-driver.js';
 import { createSession, sessionCookie, clearSessionCookie } from '../lib/session.js';
-import { requireAuth, requireCsrf, parseForm } from '../lib/middleware.js';
+import { requireAuth, requireCsrf, parseForm, roleFor } from '../lib/middleware.js';
 import { allowRate, clientIp } from '../lib/ratelimit.js';
 import { logEvent, logError, maskEmail } from '../lib/log.js';
 
@@ -200,11 +200,11 @@ export async function handleVerifyTokenPost(req, env) {
 
   const email = consumed.email;
 
-  // The admin role comes ONLY from the server-side allowlist, re-derived at
-  // every sign-in (covers both promotion and demotion). There is no
-  // self-service path to admin (parent-auth spec).
-  const adminEmails = String(env.ADMIN_EMAILS || '').split(',').map((e) => normaliseEmail(e)).filter(Boolean);
-  const role = adminEmails.includes(email) ? 'admin' : 'parent';
+  // Admin and staff rights come ONLY from the server-side allowlists. The
+  // stored role is a display cache refreshed at every sign-in; access checks
+  // re-derive it on every request (lib/middleware.js roleFor). There is no
+  // self-service path to admin or staff (parent-auth spec).
+  const role = roleFor(env, email);
 
   const existing = await env.DB.prepare(
     `SELECT id FROM users WHERE email = ?1`,
@@ -269,4 +269,13 @@ export async function handleLogoutPost(req, env) {
   }
 
   return response;
+}
+
+export function registerRoutes(route) {
+  route('GET', '/auth/request-magic-link', handleRequestMagicLink);
+  route('POST', '/auth/request-magic-link', handleRequestMagicLinkPost);
+  route('GET', '/auth/verify', handleVerifyToken);
+  route('POST', '/auth/verify', handleVerifyTokenPost);
+  route('GET', '/auth/logout', handleLogoutPage);
+  route('POST', '/auth/logout', handleLogoutPost);
 }

@@ -56,15 +56,37 @@ export function csrfField(csrfToken) {
   return html`<input type="hidden" name="csrf" value="${csrfToken}">`;
 }
 
-// Layout wrapper: page structure shared across booking pages. Pass the
-// signed-in user (from requireAuth) to render account-aware navigation;
-// the sign-out control is a POST form because sign-out is state-changing
-// and must carry the CSRF token.
-export function layout(title, bodyHtml, { user = null, extraHead = '' } = {}) {
+// Admin navigation, rendered by the layout for pages that pass `admin: true`
+// (so route modules never need to import it). Phase 2 pages already have
+// their entries: Terms, Needs attention, Waitlist, Email.
+export function adminNav() {
+  return html`
+    <nav class="admin-nav" aria-label="Admin">
+      <a href="/admin">Schedule</a>
+      <a href="/admin/terms">Terms</a>
+      <a href="/admin/classes">Classes</a>
+      <a href="/admin/bookings">Bookings</a>
+      <a href="/admin/attention">Needs attention</a>
+      <a href="/admin/waitlist">Waitlist</a>
+      <a href="/admin/customers">Customers</a>
+      <a href="/admin/email">Email</a>
+      <a href="/admin/import">Import</a>
+    </nav>
+  `;
+}
+
+// Layout wrapper: page structure shared across booking pages.
+//   user:      the signed-in user (from requireAuth) for account-aware nav;
+//              sign-out is a POST form because it changes state (CSRF).
+//   extraHead: trusted static markup for <head> (never user input).
+//   pixel:     include the Meta pixel bootstrap — ONLY /book* pages pass it
+//              (D12: the pixel never loads on account or admin pages).
+//   admin:     render the admin navigation above the page body.
+export function layout(title, bodyHtml, { user = null, extraHead = '', pixel = false, admin = false } = {}) {
   // Same header markup and classes as the static marketing pages (styles.css
   // already ships the styling and js/main.js the mobile toggle) — with
   // root-absolute hrefs because booking pages live under nested paths, plus
-  // the account-aware items. Sign-out is a POST form (state-changing, CSRF).
+  // the account-aware items.
   const accountNav = user
     ? html`
         <li><a class="site-nav__link" href="/account">My account</a></li>
@@ -113,6 +135,7 @@ export function layout(title, bodyHtml, { user = null, extraHead = '' } = {}) {
     </div>
   </header>
   <main class="booking-main">
+    ${admin ? adminNav() : ''}
     ${bodyHtml}
   </main>
   <footer class="site-footer">
@@ -143,15 +166,16 @@ export function layout(title, bodyHtml, { user = null, extraHead = '' } = {}) {
     </div>
   </footer>
   <script src="/js/main.js" defer></script>
-  <script src="/js/booking-pixel.js" defer></script>
+  ${pixel ? html`<script src="/js/booking-pixel.js" defer></script>` : ''}
 </body>
 </html>`;
 }
 
 // Standard HTML page response. Security headers are added centrally by the
 // entry point; Cache-Control is no-store because booking pages carry PII.
-export function pageResponse(title, bodyHtml, { user = null, extraHead = '', status = 200 } = {}) {
-  return new Response(String(layout(title, bodyHtml, { user, extraHead })), {
+//   options: { user, status = 200, extraHead, pixel, admin } (see layout)
+export function pageResponse(title, bodyHtml, { user = null, extraHead = '', status = 200, pixel = false, admin = false } = {}) {
+  return new Response(String(layout(title, bodyHtml, { user, extraHead, pixel, admin })), {
     status,
     headers: {
       'Content-Type': 'text/html; charset=utf-8',

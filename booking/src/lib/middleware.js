@@ -4,6 +4,19 @@ import { getSessionIdFromCookies, getSession, verifyCsrf } from './session.js';
 import { HttpError, forbidden, redirect } from './http.js';
 import { allowRate, clientIp } from './ratelimit.js';
 import { logEvent } from './log.js';
+import { normaliseEmail, emailAllowlist } from './validate.js';
+
+// Rights come ONLY from the server-side allowlists (ADMIN_EMAILS,
+// STAFF_EMAILS), re-derived on every request so that removing an address
+// takes effect on that person's very next request (parent-auth spec, D9).
+// users.role is a cache for display; it is never trusted for access.
+export function roleFor(env, email) {
+  const normalised = normaliseEmail(email);
+  if (!normalised) return 'parent';
+  if (emailAllowlist(env.ADMIN_EMAILS).includes(normalised)) return 'admin';
+  if (emailAllowlist(env.STAFF_EMAILS).includes(normalised)) return 'staff';
+  return 'parent';
+}
 
 // Resolve the authenticated user from the session cookie, or null.
 export async function requireAuth(req, env) {
@@ -14,16 +27,17 @@ export async function requireAuth(req, env) {
   if (!session) return null;
 
   const user = await env.DB.prepare(
-    `SELECT id, email, role, name, phone FROM users WHERE id = ?1`,
+    `SELECT id, email, name, phone, stripe_customer_id FROM users WHERE id = ?1`,
   ).bind(session.userId).first();
   if (!user) return null;
 
   return {
     userId: user.id,
     email: user.email,
-    role: user.role,
+    role: roleFor(env, user.email),
     name: user.name,
     phone: user.phone,
+    stripeCustomerId: user.stripe_customer_id || null,
     sessionHash: session.sessionHash,
     csrfToken: session.csrfToken,
   };
@@ -41,18 +55,29 @@ export async function requireAuthOrRedirect(req, env) {
   return user;
 }
 
-// Require the admin role, re-checked server-side against the database on
-// every request (no client-side or cookie-borne role claims are trusted).
-// Denials are logged and rate limited so repeated probing is slowed down.
+async function deny(req, env, user, area) {
+  logEvent('authz_denied', { user_id: user.userId.slice(0, 8), area });
+  // Security: per-IP limit on repeated unauthorised probing (abuse
+  // resistance); the response stays generic either way.
+  await allowRate(env, `admin-denied:ip:${clientIp(req)}`, 20, 600);
+  throw forbidden();
+}
+
+// Require the admin role (live ADMIN_EMAILS check on every request).
+// Denials are logged and rate limited.
 export async function requireAdmin(req, env) {
   const user = await requireAuthOrRedirect(req, env);
-  if (user.role !== 'admin') {
-    logEvent('authz_denied', { user_id: user.userId.slice(0, 8), area: 'admin' });
-    // Security: per-IP limit on repeated unauthorised admin probing (abuse
-    // resistance); the response stays generic either way.
-    await allowRate(env, `admin-denied:ip:${clientIp(req)}`, 20, 600);
-    throw forbidden();
-  }
+  if (user.role !== 'admin') await deny(req, env, user, 'admin');
+  return user;
+}
+
+// Require staff or admin (live STAFF_EMAILS / ADMIN_EMAILS check). Staff may
+// only use the routes that call this: GET /admin/sessions/:id/roster and
+// POST /admin/sessions/:id/attendance; everything else under /admin uses
+// requireAdmin.
+export async function requireStaff(req, env) {
+  const user = await requireAuthOrRedirect(req, env);
+  if (user.role !== 'admin' && user.role !== 'staff') await deny(req, env, user, 'staff');
   return user;
 }
 

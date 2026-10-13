@@ -29,10 +29,26 @@ export function redirect(location, status = 303) {
   return new Response(null, { status, headers: { Location: location } });
 }
 
-// Security: prevents open redirects — `next` parameters must be a local path.
+// Security: prevents open redirects — `next` must resolve to a path on our
+// own origin. Control characters (including tab/CR/LF, which browsers strip
+// from URLs) and backslashes are rejected outright; the value is then resolved
+// with the URL parser against a placeholder origin and must stay on it, and
+// the normalised result must not be protocol-relative ("/.//evil.example"
+// normalises to "//evil.example").
+const PLACEHOLDER_ORIGIN = 'https://next.invalid';
+
 export function safeNextPath(next, fallback = '/account') {
-  if (typeof next !== 'string') return fallback;
-  if (!next.startsWith('/') || next.startsWith('//') || next.includes('\\') || next.includes('\n') || next.includes('\r')) return fallback;
-  if (next.length > 512) return fallback;
-  return next;
+  if (typeof next !== 'string' || next.length === 0 || next.length > 512) return fallback;
+  if (/[\u0000-\u001f\u007f]/.test(next)) return fallback;
+  if (!next.startsWith('/') || next.startsWith('//') || next.includes('\\')) return fallback;
+  let url;
+  try {
+    url = new URL(next, PLACEHOLDER_ORIGIN);
+  } catch {
+    return fallback;
+  }
+  if (url.origin !== PLACEHOLDER_ORIGIN) return fallback;
+  const path = `${url.pathname}${url.search}${url.hash}`;
+  if (!path.startsWith('/') || path.startsWith('//') || path.includes('\\')) return fallback;
+  return path;
 }
