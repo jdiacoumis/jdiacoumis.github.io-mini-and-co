@@ -519,18 +519,23 @@ export const CHECK_NOTICES = {
   'check-no-checkout': 'This booking has no online payment to check.',
   'check-mismatch': 'That Stripe checkout belongs to a different booking — nothing was changed.',
   'check-plan-active': 'Stripe says the instalment plan is active.',
-  'check-plan-past_due': 'Stripe says the instalment plan is past due — it is retrying the card.',
+  'check-plan-past-due': 'Stripe says the instalment plan is past due — it is retrying the card.',
   'check-plan-unpaid': 'Stripe says the instalment plan is unpaid — retries have run out.',
-  'check-plan-canceled': 'Stripe says the instalment plan has ended.',
+  'check-plan-ended': 'Stripe says the instalment plan has ended.',
   'check-plan-other': 'Stripe returned an unusual status for the instalment plan — please look in the Stripe dashboard.',
   resolved: 'Marked as sorted — the note is saved on the booking.',
   'not-flagged': 'That booking was already sorted.',
 };
 
+// Stripe subscription status → notice key.
+const PLAN_STATUS_NOTICES = {
+  active: 'check-plan-active', past_due: 'check-plan-past-due', unpaid: 'check-plan-unpaid', canceled: 'check-plan-ended',
+};
+
 async function checkPlanStatus(env, booking) {
   try {
     const sub = await getPaymentsDriver(env).retrieveSubscription(booking.stripe_subscription_id);
-    return ['active', 'past_due', 'unpaid', 'canceled'].includes(sub.status) ? `check-plan-${sub.status}` : 'check-plan-other';
+    return Object.hasOwn(PLAN_STATUS_NOTICES, sub.status) ? PLAN_STATUS_NOTICES[sub.status] : 'check-plan-other';
   } catch (err) {
     logError('check_plan_failed', err, { booking_id: booking.id.slice(0, 8) });
     return 'check-failed';
