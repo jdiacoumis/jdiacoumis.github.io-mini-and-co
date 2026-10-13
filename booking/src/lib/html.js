@@ -56,19 +56,34 @@ export function csrfField(csrfToken) {
   return html`<input type="hidden" name="csrf" value="${csrfToken}">`;
 }
 
-// Admin navigation, rendered by the layout for pages that pass `admin: true`
-// (so route modules never need to import it). Phase 2 pages already have
-// their entries: Terms, Needs attention, Waitlist, Email.
-export function adminNav() {
+// The navigation bar of the admin area, rendered by the layout for pages that
+// pass `admin: true` (so route modules never need to import it). What it
+// shows follows the signed-in user's live role (lib/middleware.js roleFor):
+//   admin — every admin page;
+//   staff — a facilitator: the rosters only (the only pages they may open);
+//   anyone else — nothing (admin pages refuse them before rendering anyway).
+export function adminNav(user = null) {
+  const role = user ? user.role : null;
+  if (role === 'staff') {
+    return html`
+    <nav class="staff-nav" aria-label="Rosters">
+      <a href="/admin/rosters">Rosters</a>
+    </nav>
+  `;
+  }
+  if (role !== 'admin') return html``;
   return html`
     <nav class="admin-nav" aria-label="Admin">
       <a href="/admin">Schedule</a>
+      <a href="/admin/rosters">Rosters</a>
       <a href="/admin/terms">Terms</a>
       <a href="/admin/classes">Classes</a>
       <a href="/admin/bookings">Bookings</a>
       <a href="/admin/attention">Needs attention</a>
       <a href="/admin/waitlist">Waitlist</a>
       <a href="/admin/customers">Customers</a>
+      <a href="/admin/credits">Credits</a>
+      <a href="/admin/vouchers">Vouchers</a>
       <a href="/admin/email">Email</a>
       <a href="/admin/import">Import</a>
     </nav>
@@ -81,7 +96,8 @@ export function adminNav() {
 //   extraHead: trusted static markup for <head> (never user input).
 //   pixel:     include the Meta pixel bootstrap — ONLY /book* pages pass it
 //              (D12: the pixel never loads on account or admin pages).
-//   admin:     render the admin navigation above the page body.
+//   admin:     render the admin navigation above the page body (the full
+//              bar for an admin, the roster-only bar for a facilitator).
 export function layout(title, bodyHtml, { user = null, extraHead = '', pixel = false, admin = false } = {}) {
   // Same header markup and classes as the static marketing pages (styles.css
   // already ships the styling and js/main.js the mobile toggle) — with
@@ -91,6 +107,7 @@ export function layout(title, bodyHtml, { user = null, extraHead = '', pixel = f
     ? html`
         <li><a class="site-nav__link" href="/account">My account</a></li>
         ${user.role === 'admin' ? html`<li><a class="site-nav__link" href="/admin">Admin</a></li>` : ''}
+        ${user.role === 'staff' ? html`<li><a class="site-nav__link" href="/admin/rosters">Rosters</a></li>` : ''}
         <li>
           <form method="post" action="/auth/logout" class="nav-signout-form">
             ${csrfField(user.csrfToken)}
@@ -135,7 +152,7 @@ export function layout(title, bodyHtml, { user = null, extraHead = '', pixel = f
     </div>
   </header>
   <main class="booking-main">
-    ${admin ? adminNav() : ''}
+    ${admin ? adminNav(user) : ''}
     ${bodyHtml}
   </main>
   <footer class="site-footer">

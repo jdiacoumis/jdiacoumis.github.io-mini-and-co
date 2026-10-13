@@ -733,10 +733,6 @@ async function loadSessionHeader(env, sessionId) {
   ).bind(sessionId).first();
 }
 
-// Facilitators see a roster-only navigation (never the admin one).
-function staffNav() {
-  return html`<nav class="staff-nav" aria-label="Rosters"><a href="/admin/rosters">All rosters</a></nav>`;
-}
 
 function attendanceControls(r, sessionId, csrfToken) {
   const button = (mark, label) => html`
@@ -788,7 +784,6 @@ export async function handleAdminRoster(req, env, params) {
   });
 
   const body = html`
-    ${isAdmin ? '' : staffNav()}
     <div class="admin-wide">
       <h1>Roster — ${session.class_name}</h1>
       ${notice(req)}
@@ -818,7 +813,8 @@ export async function handleAdminRoster(req, env, params) {
       ` : ''}
     </div>
   `;
-  return pageResponse('Session roster', body, { user, admin: isAdmin });
+  // The layout's nav follows the role: the admin bar, or Rosters only.
+  return pageResponse('Session roster', body, { user, admin: true });
 }
 
 // POST /admin/sessions/:id/roster.csv — CSV export (admin only; POST + CSRF so
@@ -861,7 +857,6 @@ export async function handleAdminRosterCsv(req, env, params) {
 // the last week's and the coming weeks' sessions, each linking to its roster.
 export async function handleAdminRosters(req, env) {
   const user = await requireStaff(req, env);
-  const isAdmin = user.role === 'admin';
   const now = nowIso();
   const sessions = await listRosterSessions(env, { now });
   const upcoming = sessions.filter((s) => s.starts_at > now);
@@ -880,7 +875,6 @@ export async function handleAdminRosters(req, env) {
       </table>
     </div>`;
   const body = html`
-    ${isAdmin ? '' : staffNav()}
     <h1>Rosters</h1>
     <p class="lede">Open a session to see who's coming and mark attendance.</p>
     <h2>Coming up</h2>
@@ -888,7 +882,7 @@ export async function handleAdminRosters(req, env) {
     <h2>Last 7 days</h2>
     ${recent.length ? table(recent) : html`<p>No sessions in the last week.</p>`}
   `;
-  return pageResponse('Rosters', body, { user, admin: isAdmin });
+  return pageResponse('Rosters', body, { user, admin: true });
 }
 
 export function registerRoutes(route) {

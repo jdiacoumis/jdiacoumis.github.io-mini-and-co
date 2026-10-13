@@ -44,11 +44,25 @@ test('the layout loads the pixel only when asked, and the admin nav only for adm
   assert.ok(!plain.includes('admin-nav'));
   const funnel = String(layout('Book', html`<p>x</p>`, { pixel: true }));
   assert.ok(funnel.includes('<script src="/js/booking-pixel.js" defer></script>'));
-  const admin = String(layout('Admin', html`<p>x</p>`, { admin: true }));
-  for (const link of ['/admin/terms', '/admin/attention', '/admin/waitlist', '/admin/email']) {
+  const owner = { role: 'admin', csrfToken: 'tok' };
+  const admin = String(layout('Admin', html`<p>x</p>`, { admin: true, user: owner }));
+  for (const link of ['/admin/terms', '/admin/attention', '/admin/waitlist', '/admin/email', '/admin/rosters',
+    '/admin/credits', '/admin/vouchers']) {
     assert.ok(admin.includes(`href="${link}"`), link);
   }
   assert.ok(!/<script>/.test(funnel), 'no inline scripts');
+});
+
+test('a facilitator gets the roster-only nav; a parent never sees an admin nav', () => {
+  const staff = String(layout('Rosters', html`<p>x</p>`, { admin: true, user: { role: 'staff', csrfToken: 'tok' } }));
+  assert.ok(staff.includes('class="staff-nav"') && staff.includes('href="/admin/rosters"'));
+  assert.ok(!staff.includes('admin-nav'));
+  for (const link of ['/admin/terms', '/admin/bookings', '/admin/customers', '/admin/credits', '"/admin"']) {
+    assert.ok(!staff.includes(`href=${link.startsWith('"') ? link : `"${link}"`}`), link);
+  }
+  const parent = String(layout('Oops', html`<p>x</p>`, { admin: true, user: { role: 'parent', csrfToken: 'tok' } }));
+  assert.ok(!parent.includes('admin-nav') && !parent.includes('staff-nav') && !parent.includes('href="/admin'));
+  assert.ok(!String(layout('Oops', html`<p>x</p>`, { admin: true })).includes('admin-nav'), 'no user, no nav');
 });
 
 test('email driver fails closed: unknown driver throws, console only in development', async () => {
