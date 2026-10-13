@@ -1,5 +1,7 @@
-// Admin journey (Phase 2B): create a term for two classes at once with a
-// holiday → manual bookings (offline, pay-later, complimentary, casual) →
+// Admin journey (Phase 2B): create a term for two classes at once — a
+// Wednesday and a Monday class (review finding 7: the Monday sessions fall
+// in the same weeks, and the holiday week is skipped for both) → manual
+// bookings (offline, pay-later, complimentary, casual) →
 // the term grid and its CSV → attendance by the owner and by a facilitator
 // (staff) → consent withdrawn mid-term shows on the roster → move a week to
 // the other class → cancel one week with a credit → cancel a session (credits
@@ -76,29 +78,35 @@ export async function run(ctx) {
   const csrf = await ctx.csrfFor(admin);
 
   ctx.section('Two classes, one term form');
-  for (const [name, time] of [['Admin Test — Thursday 10:00 am', '10:00'], ['Admin Test — Thursday 11:30 am', '11:30']]) {
+  // c10: Wednesdays 10:00 am (the class the form is for); c1130: Mondays
+  // 11:30 am, created alongside it — an earlier weekday in the week.
+  for (const [name, weekday, time] of [['Admin Test — Wednesday 10:00 am', '3', '10:00'], ['Admin Test — Monday 11:30 am', '1', '11:30']]) {
     await ctx.fetch('/admin/classes/new', {
       method: 'POST', cookie: admin,
-      body: { csrf, name, description: 'E2E', venue: 'Test Hall', age_range: '3–12 months', weekday: '4', start_time: time, default_duration_mins: '45', default_capacity: '8' },
+      body: { csrf, name, description: 'E2E', venue: 'Test Hall', age_range: '3–12 months', weekday, start_time: time, default_duration_mins: '45', default_capacity: '8' },
     });
   }
-  const classRows = ctx.sql(`SELECT id, name FROM classes WHERE name LIKE 'Admin Test — Thursday%' ORDER BY name`);
-  const [c10, c1130] = classRows.map((r) => r.id);
-  ctx.check('two weekly-slot classes created', classRows.length === 2);
+  const classRows = ctx.sql(`SELECT id, name FROM classes WHERE name LIKE 'Admin Test — %'`);
+  const c10 = classRows.find((r) => r.name.includes('Wednesday'))?.id;
+  const c1130 = classRows.find((r) => r.name.includes('Monday'))?.id;
+  ctx.check('two weekly-slot classes created', classRows.length === 2 && Boolean(c10) && Boolean(c1130));
 
-  const start = nextWeekday(ctx, 4, 14);
-  const holiday = addDays(start, 14);
+  const start = nextWeekday(ctx, 3, 14);
+  const holiday = addDays(start, 14); // the Wednesday of week 3
+  const notInTerm = addDays(start, 70);
   const newForm = await ctx.fetch(`/admin/terms/new?class=${c10}`, { cookie: admin });
   ctx.check('new term form offers "also create for"', newForm.status === 200 && newForm.text.includes('Also create the same term for'));
   const termBody = {
-    csrf, class_id: c10, also: c1130, name: TERM_NAME, starts_on: start, weeks: '6', ends_on: '', holidays: holiday,
+    csrf, class_id: c10, also: c1130, name: TERM_NAME, starts_on: start, weeks: '6', ends_on: '', holidays: `${holiday}\n${notInTerm}`,
     term_price: '150', casual_price: '30', trial_price: '', returning_price: '135', returning_opens_at: '',
     public_opens_at: '', previous_term_id: 'auto', plan_instalments: '0', plan_interval: 'week',
   };
   const wrongDay = await ctx.fetch('/admin/terms/new', { method: 'POST', cookie: admin, body: { ...termBody, starts_on: addDays(start, 1) } });
-  ctx.check('a first date on the wrong weekday is explained', wrongDay.status === 400 && wrongDay.text.includes('must be a Thursday'));
+  ctx.check('a first date on the wrong weekday is explained', wrongDay.status === 400 && wrongDay.text.includes('must be a Wednesday'));
   const created = await ctx.fetch('/admin/terms/new', { method: 'POST', cookie: admin, body: termBody });
   ctx.check('terms created for both classes', created.status === 303 && created.location.includes('ok=terms-created'), created.location);
+  ctx.check('the holiday outside the term is reported, not silently used', created.location.endsWith(`&unused=${notInTerm}`)
+    && (await ctx.fetch(created.location, { cookie: admin })).text.includes('not in any week of the term'), created.location);
   const terms = ctx.sql(`SELECT id, class_id, status, starts_on, ends_on, previous_term_id FROM terms WHERE name = '${TERM_NAME}' ORDER BY class_id = '${c10}' DESC`);
   const t10 = terms.find((t) => t.class_id === c10);
   const t1130 = terms.find((t) => t.class_id === c1130);
@@ -106,7 +114,12 @@ export async function run(ctx) {
   const s10 = ctx.sql(`SELECT id, starts_at FROM class_sessions WHERE term_id = '${t10.id}' ORDER BY starts_at`);
   const s1130 = ctx.sql(`SELECT id, starts_at FROM class_sessions WHERE term_id = '${t1130.id}' ORDER BY starts_at`);
   ctx.check('six weeks with a holiday make five sessions per class', s10.length === 5 && s1130.length === 5);
-  ctx.check('the holiday week has no session', !s10.some((s) => sydneyDay(s.starts_at) === holiday));
+  ctx.check('the holiday week has no session in either class',
+    !s10.some((s) => sydneyDay(s.starts_at) === holiday) && !s1130.some((s) => sydneyDay(s.starts_at) === addDays(holiday, -2)));
+  const mondays = [0, 7, 21, 28, 35].map((d) => addDays(start, d - 2));
+  ctx.check('the Monday class runs in the same weeks — two days before each Wednesday, not the week after',
+    JSON.stringify(s1130.map((s) => sydneyDay(s.starts_at))) === JSON.stringify(mondays)
+      && t1130.starts_on === addDays(start, -2) && t1130.ends_on === addDays(start, 33), JSON.stringify(s1130.map((s) => sydneyDay(s.starts_at))));
   ctx.check('every session starts at the class time in Sydney',
     s10.every((s) => sydneyClock(s.starts_at) === '10:00') && s1130.every((s) => sydneyClock(s.starts_at) === '11:30'));
   ctx.check('term dates are the first and last class', t10.starts_on === start && t10.ends_on === addDays(start, 35));
@@ -188,7 +201,7 @@ export async function run(ctx) {
   const staffHome = await ctx.fetch('/admin', { cookie: staff });
   ctx.check('a facilitator opening /admin lands on the rosters page', staffHome.status === 303 && staffHome.location === '/admin/rosters', staffHome.location);
   const rosters = await ctx.fetch('/admin/rosters', { cookie: staff });
-  ctx.check('the rosters page lists the coming sessions', rosters.status === 200 && rosters.text.includes('Admin Test — Thursday 10:00 am') && !rosters.text.includes('admin-nav'));
+  ctx.check('the rosters page lists the coming sessions', rosters.status === 200 && rosters.text.includes('Admin Test — Wednesday 10:00 am') && !rosters.text.includes('admin-nav'));
   const staffRoster = await ctx.fetch(`/admin/sessions/${w1}/roster`, { cookie: staff });
   ctx.check('the facilitator roster has buttons but no admin links or export',
     staffRoster.status === 200 && staffRoster.text.includes('attendance-form') && !staffRoster.text.includes('admin-nav') && !staffRoster.text.includes('roster.csv'));
@@ -219,13 +232,13 @@ export async function run(ctx) {
   ctx.section('Move a week to the other class');
   const [w2b] = s1130.slice(1).map((s) => s.id);
   const transferPage = await ctx.fetch(`/admin/bookings/${a.bookingId}/transfer?session=${w2}`, { cookie: admin });
-  ctx.check('the move page lists the 11:30 class that week', transferPage.status === 200 && transferPage.text.includes(`value="${w2b}"`));
+  ctx.check('the move page lists the Monday class that week', transferPage.status === 200 && transferPage.text.includes(`value="${w2b}"`));
   const moved = await ctx.fetch(`/admin/bookings/${a.bookingId}/transfer`, { method: 'POST', cookie: admin, body: { csrf, from: w2, to: w2b } });
   ctx.check('week moved', moved.status === 303 && moved.location.includes('ok=transferred'), moved.location);
   const rows = ctx.sql(`SELECT session_id, status FROM booking_sessions WHERE booking_id = '${a.bookingId}' AND session_id IN ('${w2}', '${w2b}')`);
-  ctx.check('the 10:00 seat is released and the 11:30 seat taken',
+  ctx.check('the Wednesday seat is released and the Monday seat taken',
     rows.find((r) => r.session_id === w2)?.status === 'transferred_out' && rows.find((r) => r.session_id === w2b)?.status === 'booked', JSON.stringify(rows));
-  ctx.check('the 11:30 roster lists the child', (await ctx.fetch(`/admin/sessions/${w2b}/roster`, { cookie: admin })).text.includes('Ada'));
+  ctx.check('the Monday roster lists the child', (await ctx.fetch(`/admin/sessions/${w2b}/roster`, { cookie: admin })).text.includes('Ada'));
   ctx.check('no money changed', ctx.sql(`SELECT paid_cents FROM bookings WHERE id = '${a.bookingId}'`)[0].paid_cents === 15000);
   const dupMove = await ctx.fetch(`/admin/bookings/${a.bookingId}/transfer`, { method: 'POST', cookie: admin, body: { csrf, from: w5, to: w2b } });
   ctx.check('a move into a class the child already has is refused', dupMove.status === 409 && dupMove.text.includes('already booked'));
@@ -275,7 +288,7 @@ export async function run(ctx) {
   const casualPrices = ctx.sql(`SELECT DISTINCT casual_price_cents AS p FROM class_sessions WHERE term_id = '${t1130.id}'`);
   ctx.check('new prices apply to the term and its upcoming weeks', t1130Row.term_price_cents === 16000 && casualPrices.length === 1 && casualPrices[0].p === 3200);
   ctx.check('existing bookings keep their price', ctx.sql(`SELECT amount_cents FROM bookings WHERE id = '${a.bookingId}'`)[0].amount_cents === 15000);
-  const extra = addDays(start, 42);
+  const extra = addDays(start, 40); // a Monday, for the Monday class
   const added = await ctx.fetch(`/admin/terms/${t1130.id}/add-week`, { method: 'POST', cookie: admin, body: { csrf, date: extra } });
   const [extraSession] = ctx.sql(`SELECT id, starts_at FROM class_sessions WHERE term_id = '${t1130.id}' ORDER BY starts_at DESC LIMIT 1`);
   ctx.check('a week is added at the class time', added.location.includes('ok=week-added') && sydneyDay(extraSession.starts_at) === extra
@@ -291,7 +304,7 @@ export async function run(ctx) {
   await ctx.fetch(`/admin/terms/${t10.id}/status`, { method: 'POST', cookie: admin, body: { csrf, status: 'closed' } });
   ctx.check('term closed', !(await ctx.fetch('/book')).text.includes(TERM_NAME));
   const list = await ctx.fetch('/admin/terms', { cookie: admin });
-  ctx.check('terms list shows both classes', list.status === 200 && list.text.includes('Admin Test — Thursday 11:30 am') && list.text.includes(TERM_NAME));
+  ctx.check('terms list shows both classes', list.status === 200 && list.text.includes('Admin Test — Monday 11:30 am') && list.text.includes(TERM_NAME));
 
   ctx.section('Re-run the term and auto-enrol');
   const rerunForm = await ctx.fetch(`/admin/terms/${t10.id}/rerun`, { cookie: admin });

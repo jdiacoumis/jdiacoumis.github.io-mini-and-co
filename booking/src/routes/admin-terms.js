@@ -28,7 +28,7 @@ import { sendTemplate, notifyBookingConfirmed } from '../lib/notify.js';
 import { reenrolInvitation } from '../lib/emails/ops.js';
 import { logEvent, logError } from '../lib/log.js';
 import {
-  planTermDates, parseDateList, sessionStartsFor, datetimeLocalToUtc, utcToDatetimeLocal, rerunDefaults,
+  planTermDates, parseDateList, sessionStartsFor, datetimeLocalToUtc, utcToDatetimeLocal, rerunDefaults, sameWeekDate,
   addDays, isDateStr, createTermsWithSessions, termNameTaken, listTermsOverview, loadTermGrid, GRID_CELLS,
   syncTermDates, removeTermSession, sessionHasBookings, autoEnrolCandidates, autoEnrolChild, autoEnrolExpiry,
   noticeFor, errorBlock, centsToInput, optionalDollars, shortDate,
@@ -184,7 +184,7 @@ function termForm({ mode, action, values, classes = [], terms = [], error = '', 
           </div>
         </div>
         <div class="form-group">
-          <label for="holidays">Holiday dates to skip <span class="muted">(optional, e.g. 2027-03-10 — one per line or separated by commas)</span></label>
+          <label for="holidays">Holiday weeks to skip <span class="muted">(optional — any date in the week, e.g. 2027-03-10, one per line or separated by commas; the whole Monday–Sunday week is skipped for every class created here)</span></label>
           <textarea id="holidays" name="holidays" rows="2" maxlength="1000">${values.holidays}</textarea>
         </div>
       ` : ''}
@@ -342,17 +342,39 @@ function readTermForm(form, { mode }) {
   };
 }
 
-// Plan one class's term dates from the shared fields: the first class date
-// moves to this class's weekday within the same week.
-function planForClass(cls, primary, dates) {
-  const delta = (cls.weekday - primary.weekday + 7) % 7;
+// Plan one class's term dates from the shared fields: the first (and last)
+// class date moves to this class's weekday within the same Monday–Sunday
+// week — earlier in the week for an earlier weekday — and the holiday dates
+// skip the same weeks for every class.
+export function planForClass(cls, primary, dates) {
+  if (cls.id === primary.id) {
+    return planTermDates({ ...dates, weekday: cls.weekday });
+  }
+  // The primary's dates are checked first (its weekday must match); every
+  // other class follows them into the same weeks.
   return planTermDates({
-    startsOn: addDays(dates.startsOn, delta),
+    startsOn: sameWeekDate(dates.startsOn, cls.weekday),
     weeks: dates.weeks,
-    endsOn: dates.endsOn ? addDays(dates.endsOn, delta) : null,
+    endsOn: dates.endsOn ? sameWeekDate(dates.endsOn, cls.weekday) : null,
     skipDates: dates.skipDates,
     weekday: cls.weekday,
   });
+}
+
+// Holiday dates that fell in no week of the new term(s), shown once after
+// creating it (`unused` in the redirect: validated dates only).
+function unusedHolidaysParam(dates) {
+  const list = [...new Set(dates)].filter((d) => isDateStr(d)).sort().slice(0, 10);
+  return list.length ? `&unused=${list.join(',')}` : '';
+}
+
+function unusedHolidaysNotice(req) {
+  const list = String(new URL(req.url).searchParams.get('unused') || '').split(',').filter((d) => isDateStr(d)).slice(0, 10);
+  if (!list.length) return html``;
+  const label = (d) => formatSydney(sydneyToUtc(d, '12:00'), 'date');
+  return html`<p class="form-warning" role="status">${list.length === 1 ? 'This holiday date was' : 'These holiday dates were'}
+    not in any week of the term, so ${list.length === 1 ? 'it was' : 'they were'} not used: ${list.map(label).join('; ')}.
+    If one was a mistake, add or remove weeks on the term's Edit page.</p>`;
 }
 
 function datePlanError(code, cls) {
@@ -474,12 +496,14 @@ export async function handleAdminTermNewPost(req, env) {
     .filter(Boolean);
 
   const specs = [];
+  const unused = new Set();
   for (const cls of [primary, ...others]) {
     if (cls.weekday === null || cls.weekday === undefined || !cls.start_time) {
       return newTermPage(env, user, values, { error: `${cls.name} has no regular day and start time — set them on the class first.`, status: 400 });
     }
     const plan = planForClass(cls, primary, parsed.dates);
     if (!plan.ok) return newTermPage(env, user, values, { error: datePlanError(plan.error, cls), status: 400 });
+    for (const date of plan.unusedSkipDates) unused.add(date);
     if (await termNameTaken(env, cls.id, values.name)) {
       return newTermPage(env, user, values, { error: `${cls.name} already has a term called “${values.name}”.`, status: 400 });
     }
@@ -524,7 +548,7 @@ export async function handleAdminTermNewPost(req, env) {
     return newTermPage(env, user, values, { error: NAME_CLASH(values.name), status: 409 });
   }
   logEvent('term_created_by_admin', { terms: ids.length, by: user.userId.slice(0, 8) });
-  return redirect(`/admin/terms/${ids[0]}?ok=${ids.length > 1 ? 'terms-created' : 'term-created'}`, 303);
+  return redirect(`/admin/terms/${ids[0]}?ok=${ids.length > 1 ? 'terms-created' : 'term-created'}${unusedHolidaysParam([...unused])}`, 303);
 }
 
 // --- The term grid ------------------------------------------------------------------
@@ -580,7 +604,7 @@ export async function handleAdminTermGrid(req, env, params) {
     <div class="admin-wide">
       <p class="breadcrumb"><a href="/admin/terms">Terms</a></p>
       <h1>${term.name} — ${term.class_name}</h1>
-      ${noticeFor(req, NOTICES, ERRORS)}
+      ${noticeFor(req, NOTICES, ERRORS)}${unusedHolidaysNotice(req)}
       <p class="lede">${statusBadge(term.status)} · ${dateRange(term)} · ${sessions.filter((s) => s.status === 'scheduled').length} weeks
         · term ${formatAud(term.term_price_cents)}${term.returning_price_cents !== null ? ` (returning ${formatAud(term.returning_price_cents)})` : ''}
         · casual ${formatAud(term.casual_price_cents)}</p>
@@ -899,7 +923,7 @@ export async function handleAdminTermRerunPost(req, env, params) {
     return rerunPage(env, user, source, values, { error: NAME_CLASH(values.name), status: 409 });
   }
   logEvent('term_rerun', { from: source.id.slice(0, 8), term_id: termId.slice(0, 8), by: user.userId.slice(0, 8) });
-  return redirect(`/admin/terms/${termId}/auto-enrol?ok=rerun-created`, 303);
+  return redirect(`/admin/terms/${termId}/auto-enrol?ok=rerun-created${unusedHolidaysParam(plan.unusedSkipDates)}`, 303);
 }
 
 // --- Auto-enrol -------------------------------------------------------------------
@@ -933,7 +957,7 @@ export async function handleAdminAutoEnrol(req, env, params) {
   const body = html`
     <p class="breadcrumb"><a href="/admin/terms">Terms</a> › <a href="/admin/terms/${term.id}">${term.name}</a></p>
     <h1>Hold places for returning families</h1>
-    ${noticeFor(req, NOTICES, ERRORS)}
+    ${noticeFor(req, NOTICES, ERRORS)}${unusedHolidaysNotice(req)}
     ${previous ? html`
       <p class="lede">Each ticked child gets a place held in <strong>${term.name}</strong> (${term.class_name}) at
         ${formatAud(price)}${term.returning_price_cents !== null ? ' (the returning price)' : ''}, less any account credit,

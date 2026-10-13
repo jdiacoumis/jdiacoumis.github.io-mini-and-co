@@ -74,6 +74,16 @@ export function dateWeekday(dateStr) {
   return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
 }
 
+// Weeks run Monday to Sunday (as in Australia): a weekday's place in its
+// week (Monday 0 … Sunday 6), and the Monday of a date's week.
+export function weekPosition(weekday) {
+  return (Number(weekday) + 6) % 7;
+}
+
+export function weekOf(dateStr) {
+  return addDays(dateStr, -weekPosition(dateWeekday(dateStr)));
+}
+
 // "2027-03-10, 2027-04-14" (commas, spaces or new lines) → sorted unique dates
 // plus whatever could not be read.
 export function parseDateList(text) {
@@ -120,9 +130,13 @@ export function parseSignedDollarsToCents(value, maxCents = 1000000) {
 
 // The weekly class dates of a term: from `startsOn` every 7 days up to the
 // last class date (`endsOn`, or start + (weeks − 1) weeks), leaving out the
-// holiday dates. "A ten-week term with a holiday" is weeks = 10 → nine
-// classes (class-scheduling spec). `weekday` (0–6), when given, must match
-// the start date.
+// holiday WEEKS: a holiday date skips the class in its Monday–Sunday week
+// (review finding 7 — so one list of holidays skips the same weeks for a
+// Monday class and a Wednesday class created together). "A ten-week term
+// with a holiday" is weeks = 10 → nine classes (class-scheduling spec).
+// `weekday` (0–6), when given, must match the start date. unusedSkipDates
+// are the holiday dates whose week has no class in the term — shown to the
+// owner, who probably mistyped one.
 // Returns { ok: true, dates, skipped, unusedSkipDates, startsOn, endsOn }
 // or { ok: false, error } with error ∈ start_date | start_weekday | end_date |
 // weeks | too_long | no_sessions.
@@ -141,21 +155,31 @@ export function planTermDates({ startsOn, weeks = null, endsOn = null, skipDates
     if (weeks > MAX_TERM_WEEKS) return { ok: false, error: 'too_long' };
     last = addDays(startsOn, 7 * (weeks - 1));
   }
-  const skip = new Set(skipDates);
+  const holidayWeeks = new Set(skipDates.filter((d) => isDateStr(d)).map(weekOf));
+  const termWeeks = new Set();
   const dates = [];
   const skipped = [];
   for (let date = startsOn; date <= last; date = addDays(date, 7)) {
-    (skip.has(date) ? skipped : dates).push(date);
+    termWeeks.add(weekOf(date));
+    (holidayWeeks.has(weekOf(date)) ? skipped : dates).push(date);
   }
   if (!dates.length) return { ok: false, error: 'no_sessions' };
   return {
     ok: true,
     dates,
     skipped,
-    unusedSkipDates: [...skip].filter((d) => !skipped.includes(d)).sort(),
+    unusedSkipDates: [...new Set(skipDates)].filter((d) => !termWeeks.has(weekOf(d))).sort(),
     startsOn: dates[0],
     endsOn: dates[dates.length - 1],
   };
+}
+
+// The first class date of a class created alongside the primary one ("also
+// create for"): the same Monday–Sunday week, on its own weekday — earlier in
+// the week when its weekday is (review finding 7: a Monday class created
+// with a Wednesday one used to start the following week).
+export function sameWeekDate(primaryDate, weekday) {
+  return addDays(weekOf(primaryDate), weekPosition(weekday));
 }
 
 // One UTC start instant per class date at the class's Sydney start time —
