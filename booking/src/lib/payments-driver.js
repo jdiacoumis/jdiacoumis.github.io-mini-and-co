@@ -1,72 +1,215 @@
-// Payments driver: Stripe Checkout (production) or mock (local dev).
-// Card data never touches this system — Stripe Checkout is fully hosted.
-// The mock driver refuses to load in production (fail-closed).
+// Payments driver (design D4): Stripe over REST (production) or a mock (local
+// development). Card data never touches this system — Stripe Checkout and the
+// Billing Portal are fully hosted. The mock driver refuses to load outside
+// ENVIRONMENT=development (fail-closed).
+//
+// Surface (both drivers):
+//   createCheckout({ bookingId, amountCents, description, customerEmail,
+//                    customerId, mode: 'payment'|'subscription',
+//                    plan: { eachCents, firstCents, n, interval },
+//                    successUrl, cancelUrl })          → { url, checkoutRef }
+//   expireCheckout(ref)                                → { status }
+//   retrieveCheckout(ref)  → { status, paymentStatus, paymentIntent,
+//                              subscriptionId, customerId, amountTotal, mode, bookingId }
+//   retrieveSubscription(id) → { id, status, customerId, startDate,
+//                                billingCycleAnchor, cancelAt, currentPeriodEnd, metadata }
+//   setSubscriptionCancelAt(id, unixSeconds)           → { id, cancelAt }
+//   cancelSubscription(id)                             → { id, status }
+//   createBillingPortalSession(customerId, returnUrl)  → url
+//   verifyWebhook(signatureHeader, rawBody)            → event (or throws)
 
 import { hmacSha256Hex, timingSafeEqual } from './crypto.js';
 import { logEvent } from './log.js';
-import { uuid } from './db.js';
+import { uuid, nowIso } from './db.js';
 
+const STRIPE_API = 'https://api.stripe.com/v1';
 const WEBHOOK_TOLERANCE_SECS = 300; // 5 minutes
+
+// Stripe's minimum Checkout lifetime is 30 minutes; the booking's seat hold
+// (PENDING_BOOKING_EXPIRY_SECS, 35 minutes) outlives it, so a payment can only
+// land after the hold through a delayed webhook — which D6 handles.
+export const CHECKOUT_EXPIRY_SECS = 31 * 60;
+
+const INTERVAL_COUNT = { week: 1, fortnight: 2 };
+
+// Stripe object ids are [A-Za-z0-9_]; never interpolate anything else into a URL path.
+function stripeId(value, what) {
+  const id = String(value || '');
+  if (!/^[A-Za-z0-9_]{3,255}$/.test(id)) throw new Error(`Invalid Stripe ${what} id`);
+  return id;
+}
+
+// A field that may be an id or an expanded object.
+export function idOf(value) {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object' && typeof value.id === 'string') return value.id;
+  return null;
+}
+
+async function stripeRequest(env, method, path, params = null) {
+  if (!env.STRIPE_SECRET_KEY) throw new Error('STRIPE_SECRET_KEY is not configured');
+  const init = { method, headers: { Authorization: `Bearer ${env.STRIPE_SECRET_KEY}` } };
+  if (params) {
+    init.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+    init.body = params.toString();
+  }
+  const response = await fetch(`${STRIPE_API}${path}`, init);
+  if (!response.ok) {
+    // Security: Stripe's error body can echo request details — keep only the
+    // error code for the logs; callers show a generic message.
+    let code = '';
+    try {
+      const body = await response.json();
+      code = String(body?.error?.code || body?.error?.type || '').slice(0, 60);
+    } catch { /* not JSON */ }
+    const err = new Error(`Stripe ${method} ${path.split('/').slice(0, 3).join('/')} failed (HTTP ${response.status}${code ? `, ${code}` : ''})`);
+    err.status = response.status;
+    err.code = code;
+    throw err;
+  }
+  return response.json();
+}
+
+function normaliseCheckout(session) {
+  return {
+    status: session.status,                     // open | complete | expired
+    paymentStatus: session.payment_status,      // paid | unpaid | no_payment_required
+    paymentIntent: idOf(session.payment_intent),
+    subscriptionId: idOf(session.subscription),
+    customerId: idOf(session.customer),
+    amountTotal: Number.isInteger(session.amount_total) ? session.amount_total : null,
+    mode: session.mode,
+    bookingId: session.client_reference_id || session.metadata?.booking_id || null,
+  };
+}
+
+function normaliseSubscription(sub) {
+  return {
+    id: sub.id,
+    status: sub.status,
+    customerId: idOf(sub.customer),
+    startDate: sub.start_date ?? null,
+    billingCycleAnchor: sub.billing_cycle_anchor ?? null,
+    cancelAt: sub.cancel_at ?? null,
+    currentPeriodEnd: sub.current_period_end ?? sub.items?.data?.[0]?.current_period_end ?? null,
+    metadata: sub.metadata || {},
+  };
+}
+
+// Validate an instalment plan for subscription mode.
+function checkPlan(plan) {
+  if (!plan || !Number.isInteger(plan.n) || plan.n < 2) throw new Error('A plan needs at least two instalments');
+  if (!Number.isInteger(plan.eachCents) || plan.eachCents <= 0) throw new Error('Instalments are positive cents');
+  if (!Number.isInteger(plan.firstCents) || plan.firstCents < plan.eachCents) throw new Error('first ≥ each');
+  if (!INTERVAL_COUNT[plan.interval]) throw new Error(`Unknown plan interval: ${plan.interval}`);
+}
+
+// Build the Checkout Session parameters (exported for unit tests).
+export function checkoutParams(env, {
+  bookingId, amountCents, description, customerEmail = null, customerId = null,
+  mode = 'payment', plan = null, successUrl = null, cancelUrl = null, nowSeconds = Math.floor(Date.now() / 1000),
+}) {
+  const params = new URLSearchParams();
+  params.set('mode', mode);
+  params.set('success_url', successUrl || `${env.PUBLIC_BASE_URL}/book/confirm?booking=${bookingId}`);
+  params.set('cancel_url', cancelUrl || `${env.PUBLIC_BASE_URL}/book/cancelled?booking=${bookingId}`);
+  // The booking id travels server-side → Stripe → webhook; nothing the
+  // browser sends decides which booking a payment confirms.
+  params.set('client_reference_id', bookingId);
+  params.set('metadata[booking_id]', bookingId);
+  params.set('payment_method_types[0]', 'card');
+  params.set('expires_at', String(nowSeconds + CHECKOUT_EXPIRY_SECS));
+  if (customerId) params.set('customer', customerId);
+  else if (customerEmail) params.set('customer_email', customerEmail);
+
+  const name = String(description || 'Mini & Co. Sensory Classes').slice(0, 250);
+  if (mode === 'payment') {
+    if (!Number.isInteger(amountCents) || amountCents <= 0) throw new Error('amountCents must be positive');
+    params.set('line_items[0][price_data][currency]', 'aud');
+    params.set('line_items[0][price_data][unit_amount]', String(amountCents));
+    params.set('line_items[0][price_data][product_data][name]', name);
+    params.set('line_items[0][quantity]', '1');
+    params.set('payment_intent_data[metadata][booking_id]', bookingId);
+    // Reuse one Stripe customer per family (users.stripe_customer_id).
+    if (!customerId) params.set('customer_creation', 'always');
+  } else if (mode === 'subscription') {
+    checkPlan(plan);
+    params.set('line_items[0][price_data][currency]', 'aud');
+    params.set('line_items[0][price_data][unit_amount]', String(plan.eachCents));
+    params.set('line_items[0][price_data][recurring][interval]', 'week');
+    params.set('line_items[0][price_data][recurring][interval_count]', String(INTERVAL_COUNT[plan.interval]));
+    params.set('line_items[0][price_data][product_data][name]', name);
+    params.set('line_items[0][quantity]', '1');
+    // The remainder of an uneven split rides on the first invoice only.
+    if (plan.firstCents > plan.eachCents) {
+      params.set('line_items[1][price_data][currency]', 'aud');
+      params.set('line_items[1][price_data][unit_amount]', String(plan.firstCents - plan.eachCents));
+      params.set('line_items[1][price_data][product_data][name]', `${name.slice(0, 200)} — first instalment balance`);
+      params.set('line_items[1][quantity]', '1');
+    }
+    params.set('subscription_data[metadata][booking_id]', bookingId);
+  } else {
+    throw new Error(`Unknown checkout mode: ${mode}`);
+  }
+  return params;
+}
 
 function stripeDriver(env) {
   return {
     name: 'stripe',
 
-    // Create a hosted Checkout Session for a pending booking. The booking id
-    // travels as client_reference_id so the webhook can reconcile payment →
-    // booking without trusting anything client-side.
-    async createCheckout({ bookingId, amountCents, description }) {
-      const params = new URLSearchParams({
-        mode: 'payment',
-        success_url: `${env.PUBLIC_BASE_URL}/book/confirm?booking=${bookingId}`,
-        cancel_url: `${env.PUBLIC_BASE_URL}/book/cancelled?booking=${bookingId}`,
-        'payment_method_types[]': 'card',
-        'line_items[0][price_data][currency]': 'aud',
-        'line_items[0][price_data][unit_amount]': String(amountCents),
-        'line_items[0][price_data][product_data][name]': description,
-        'line_items[0][quantity]': '1',
-        client_reference_id: bookingId,
-        expires_at: String(Math.floor(Date.now() / 1000) + 30 * 60),
-      });
-
-      const response = await fetch('https://api.stripe.com/v1/checkout/sessions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: params,
-      });
-
-      if (!response.ok) {
-        // Security: Stripe's error body can include request details — log the
-        // status only, never echo it to the user.
-        throw new Error(`Stripe checkout creation failed (HTTP ${response.status})`);
-      }
-
-      const session = await response.json();
+    async createCheckout(options) {
+      const session = await stripeRequest(env, 'POST', '/checkout/sessions', checkoutParams(env, options));
       logEvent('checkout_created', {
-        booking_id: bookingId.slice(0, 8),
-        amount_cents: amountCents,
-        provider: 'stripe',
+        booking_id: options.bookingId.slice(0, 8), mode: options.mode || 'payment', provider: 'stripe',
       });
       return { url: session.url, checkoutRef: session.id };
     },
 
-    // Verify a Stripe webhook: HMAC-SHA256 over `${timestamp}.${payload}`
-    // with the endpoint secret, constant-time compare, 5-minute timestamp
-    // tolerance (replay window). Returns the parsed event or throws.
+    // After this, the hosted page can no longer take a payment. Throws if the
+    // session is not open (e.g. it was already completed).
+    async expireCheckout(ref) {
+      const session = await stripeRequest(env, 'POST', `/checkout/sessions/${stripeId(ref, 'checkout')}/expire`);
+      return { status: session.status };
+    },
+
+    async retrieveCheckout(ref) {
+      return normaliseCheckout(await stripeRequest(env, 'GET', `/checkout/sessions/${stripeId(ref, 'checkout')}`));
+    },
+
+    async retrieveSubscription(id) {
+      return normaliseSubscription(await stripeRequest(env, 'GET', `/subscriptions/${stripeId(id, 'subscription')}`));
+    },
+
+    async setSubscriptionCancelAt(id, unixSeconds) {
+      const params = new URLSearchParams({
+        cancel_at: String(Math.floor(unixSeconds)),
+        proration_behavior: 'none',
+      });
+      const sub = await stripeRequest(env, 'POST', `/subscriptions/${stripeId(id, 'subscription')}`, params);
+      return { id: sub.id, cancelAt: sub.cancel_at };
+    },
+
+    async cancelSubscription(id) {
+      const sub = await stripeRequest(env, 'DELETE', `/subscriptions/${stripeId(id, 'subscription')}`);
+      return { id: sub.id, status: sub.status };
+    },
+
+    async createBillingPortalSession(customerId, returnUrl) {
+      const params = new URLSearchParams({ customer: stripeId(customerId, 'customer'), return_url: returnUrl });
+      const session = await stripeRequest(env, 'POST', '/billing_portal/sessions', params);
+      return session.url;
+    },
+
+    // HMAC-SHA256 over `${timestamp}.${payload}` with the endpoint secret,
+    // constant-time compare, 5-minute tolerance. Returns the event or throws.
     async verifyWebhook(signatureHeader, body) {
-      // Security: never fall back to HMAC-ing with the string "undefined" —
-      // a missing secret must reject every webhook, not accept ones signed
-      // with a guessable constant key.
-      if (!env.STRIPE_WEBHOOK_SECRET) {
-        throw new Error('STRIPE_WEBHOOK_SECRET is not configured');
-      }
-      const parts = String(signatureHeader || '').split(',');
+      // Security: never fall back to HMAC-ing with the string "undefined" — a
+      // missing secret must reject every webhook.
+      if (!env.STRIPE_WEBHOOK_SECRET) throw new Error('STRIPE_WEBHOOK_SECRET is not configured');
       let timestamp = null;
       const candidates = [];
-      for (const part of parts) {
+      for (const part of String(signatureHeader || '').split(',')) {
         const eq = part.indexOf('=');
         if (eq === -1) continue;
         const key = part.slice(0, eq).trim();
@@ -74,50 +217,116 @@ function stripeDriver(env) {
         if (key === 't') timestamp = value;
         if (key === 'v1') candidates.push(value);
       }
-      if (!timestamp || candidates.length === 0) {
-        throw new Error('Webhook signature header malformed');
-      }
+      if (!timestamp || candidates.length === 0) throw new Error('Webhook signature header malformed');
 
       const ts = Number.parseInt(timestamp, 10);
       if (!Number.isInteger(ts) || Math.abs(Math.floor(Date.now() / 1000) - ts) > WEBHOOK_TOLERANCE_SECS) {
         throw new Error('Webhook timestamp outside tolerance');
       }
-
       const expected = await hmacSha256Hex(env.STRIPE_WEBHOOK_SECRET, `${timestamp}.${body}`);
-      // Constant-time comparison against every v1 candidate (Stripe sends
-      // multiple during secret rolls); no early exit on partial match.
+      // Constant-time against every v1 candidate (Stripe sends several during
+      // a secret roll); no early exit.
       let valid = false;
       for (const candidate of candidates) {
         if (timingSafeEqual(expected, candidate)) valid = true;
       }
       if (!valid) throw new Error('Webhook signature mismatch');
-
       return JSON.parse(body);
     },
   };
 }
 
+// The mock keeps no state of its own: a mock checkout is "open" while a
+// pending booking with that payment_ref still holds its seats, "complete" once
+// the booking is confirmed — so it behaves like Stripe for the code paths
+// that ask (cancel page, Check with Stripe). The dev page /dev/mock-checkout
+// plays the hosted page and posts synthetic events through the same webhook
+// processing as production (routes/dev.js).
 function mockDriver(env) {
-  // Security: fail-closed — the mock driver would confirm bookings without
-  // payment, so it loads only when the environment is EXPLICITLY development;
-  // a missing or unexpected ENVIRONMENT value behaves like production.
-  if (env.ENVIRONMENT !== 'development') {
-    throw new Error('Mock payments driver cannot load in production');
-  }
+  // Security: fail-closed — the mock confirms bookings without payment, so it
+  // loads only when the environment is EXPLICITLY development.
+  if (env.ENVIRONMENT !== 'development') throw new Error('Mock payments driver cannot load in production');
+
+  const bookingByRef = (ref) => env.DB.prepare(
+    `SELECT id, status, expires_at, payment_intent, stripe_subscription_id, amount_cents, payment_method,
+            plan_instalments, plan_instalment_cents, plan_interval, paid_at
+     FROM bookings WHERE payment_ref = ?1`,
+  ).bind(ref).first();
 
   return {
     name: 'mock',
 
-    async createCheckout({ bookingId, amountCents, description }) {
-      const checkoutRef = `mock_${uuid()}`;
-      logEvent('checkout_created', {
-        booking_id: bookingId.slice(0, 8),
-        amount_cents: amountCents,
-        provider: 'mock',
-      });
-      return { url: `/dev/mock-checkout?booking=${bookingId}`, checkoutRef };
+    async createCheckout({ bookingId, mode = 'payment', plan = null, amountCents }) {
+      if (mode === 'subscription') checkPlan(plan);
+      else if (!Number.isInteger(amountCents) || amountCents <= 0) throw new Error('amountCents must be positive');
+      const checkoutRef = `cs_mock_${uuid().replace(/-/g, '')}`;
+      logEvent('checkout_created', { booking_id: bookingId.slice(0, 8), mode, provider: 'mock' });
+      return {
+        url: `/dev/mock-checkout?booking=${encodeURIComponent(bookingId)}&ref=${checkoutRef}`,
+        checkoutRef,
+      };
     },
 
+    async expireCheckout(ref) {
+      const booking = await bookingByRef(ref);
+      if (booking && booking.status === 'confirmed') {
+        const err = new Error('Mock checkout is already complete');
+        err.code = 'checkout_complete';
+        throw err;
+      }
+      logEvent('mock_checkout_expired', { ref: String(ref).slice(0, 16) });
+      return { status: 'expired' };
+    },
+
+    async retrieveCheckout(ref) {
+      const booking = await bookingByRef(ref);
+      if (!booking) throw new Error('No such mock checkout');
+      const live = booking.status === 'pending' && booking.expires_at > nowIso();
+      const complete = booking.status === 'confirmed' || Boolean(booking.paid_at);
+      return {
+        status: complete ? 'complete' : live ? 'open' : 'expired',
+        paymentStatus: complete ? 'paid' : 'unpaid',
+        paymentIntent: booking.payment_intent,
+        subscriptionId: booking.stripe_subscription_id,
+        customerId: null,
+        amountTotal: booking.amount_cents,
+        mode: booking.payment_method === 'plan' ? 'subscription' : 'payment',
+        bookingId: booking.id,
+      };
+    },
+
+    async retrieveSubscription(id) {
+      const booking = await env.DB.prepare(
+        `SELECT id, status, paid_at, created_at FROM bookings WHERE stripe_subscription_id = ?1`,
+      ).bind(id).first();
+      const anchor = Math.floor(Date.parse(booking?.paid_at || booking?.created_at || nowIso()) / 1000);
+      return {
+        id,
+        status: booking && booking.status !== 'cancelled' ? 'active' : 'canceled',
+        customerId: null,
+        startDate: anchor,
+        billingCycleAnchor: anchor,
+        cancelAt: null,
+        currentPeriodEnd: null,
+        metadata: booking ? { booking_id: booking.id } : {},
+      };
+    },
+
+    async setSubscriptionCancelAt(id, unixSeconds) {
+      logEvent('mock_subscription_cancel_at', { subscription: String(id).slice(0, 16), cancel_at: unixSeconds });
+      return { id, cancelAt: unixSeconds };
+    },
+
+    async cancelSubscription(id) {
+      logEvent('mock_subscription_cancelled', { subscription: String(id).slice(0, 16) });
+      return { id, status: 'canceled' };
+    },
+
+    async createBillingPortalSession() {
+      return '/dev/mock-portal';
+    },
+
+    // Development only: the mock endpoint trusts the body (no signature).
     async verifyWebhook(signatureHeader, body) {
       return JSON.parse(body);
     },
