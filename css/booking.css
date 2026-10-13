@@ -690,4 +690,271 @@ button:active {
 
 /* === 2C waitlist admin, email, ops (routes/admin-waitlist.js, admin-email.js) — start === */
 
+/* Every control on these pages is a comfortable thumb target (44 px). */
+.ops-page button,
+.ops-page .button-link,
+.ops-page select,
+.ops-page input[type="text"],
+.ops-page input[type="email"],
+.ops-page input[type="tel"],
+.ops-page input[type="date"] {
+  min-height: 44px;
+}
+
+.ops-page summary.button-link {
+  display: inline-flex;
+  align-items: center;
+  list-style: none;
+}
+
+.ops-page summary.button-link::-webkit-details-marker {
+  display: none;
+}
+
+/* --- Waitlist --- */
+
+.waitlist-summary {
+  font-weight: 400;
+  margin: var(--space-2xs) 0;
+}
+
+.waitlist-entries {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-sm) 0;
+}
+
+.waitlist-entry {
+  border-top: 1px solid var(--colour-line-soft);
+  padding: var(--space-sm) 0;
+}
+
+.waitlist-entry p {
+  margin: 0 0 var(--space-2xs);
+}
+
+.waitlist-entry--offered {
+  background-color: var(--colour-bg-warm);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm);
+}
+
+.waitlist-entry__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-xs);
+}
+
+.waitlist-position {
+  font-weight: 600;
+  min-width: 1.5rem;
+}
+
+.waitlist-contact a {
+  overflow-wrap: anywhere;
+}
+
+.waitlist-note {
+  color: var(--colour-text-soft);
+  font-style: italic;
+  white-space: pre-line;
+}
+
+.waitlist-actions,
+.waitlist-term__tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-xs);
+  margin-top: var(--space-xs);
+}
+
+.ops-confirm[open],
+.waitlist-add[open] {
+  flex-basis: 100%;
+}
+
+.ops-confirm form {
+  background-color: #fff;
+  border: 1px solid var(--colour-line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm);
+  margin-top: var(--space-xs);
+}
+
+.ops-confirm form p {
+  margin: 0 0 var(--space-xs);
+}
+
+.waitlist-earlier {
+  margin: var(--space-sm) 0;
+}
+
+.waitlist-earlier summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  color: var(--colour-text-soft);
+}
+
+.waitlist-earlier ul {
+  list-style: none;
+  padding: 0;
+}
+
+.waitlist-earlier__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-xs);
+  border-top: 1px solid var(--colour-line-soft);
+  padding: var(--space-2xs) 0;
+}
+
+.status-waiting { background-color: var(--colour-bg-blush); }
+.status-offered { background-color: var(--colour-bg-warm); }
+.status-booked { background-color: var(--colour-bg-sage); }
+.status-declined,
+.status-removed { background-color: var(--colour-line-soft); color: var(--colour-text-muted); }
+
+/* --- Offer a place --- */
+
+.offer-kind,
+.offer-week label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.offer-kind input,
+.offer-week input {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.offer-weeks {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.offer-week {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-xs);
+  border-top: 1px solid var(--colour-line-soft);
+}
+
+.offer-summary h2 {
+  margin-top: 0;
+}
+
+/* --- Email families --- */
+
+.email-audience {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.email-audience input {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.email-compose textarea {
+  min-height: 14rem;
+  line-height: 1.5;
+}
+
+.email-preview {
+  background-color: #fff;
+  border: 1px dashed var(--colour-line);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  margin: var(--space-md) 0;
+  overflow-wrap: anywhere;
+}
+
+.email-preview__meta {
+  color: var(--colour-text-soft);
+  font-size: 0.9rem;
+  border-bottom: 1px solid var(--colour-line-soft);
+  padding-bottom: var(--space-xs);
+}
+
+.email-recipients-box summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+.email-recipients,
+.email-results {
+  list-style: none;
+  padding: 0;
+}
+
+.email-recipients li,
+.email-results li {
+  border-top: 1px solid var(--colour-line-soft);
+  padding: var(--space-2xs) 0;
+  overflow-wrap: anywhere;
+}
+
+.email-send {
+  margin: var(--space-md) 0;
+}
+
+.email-results__status {
+  display: inline-block;
+  min-width: 7rem;
+  font-weight: 500;
+}
+
+.email-results__status--failed,
+.email-status-failed {
+  color: #a04545;
+  font-weight: 500;
+}
+
+.email-results__status--skipped {
+  color: var(--colour-text-muted);
+}
+
+/* --- Email log --- */
+
+.email-log-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-sm);
+  margin: var(--space-md) 0;
+}
+
+.email-log-filters label {
+  flex: 1 1 11rem;
+  font-size: 0.9rem;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.email-log td {
+  overflow-wrap: anywhere;
+}
+
 /* === 2C waitlist admin, email, ops — end === */
