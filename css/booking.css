@@ -966,7 +966,9 @@ button:active {
   border-bottom: 1px solid var(--colour-line-soft);
 }
 
-.waitlist-entry {
+/* A family's own waitlist places (waitlist page, account); the owner's
+   waitlist page styles its entries under .waitlist-entries (2C). */
+.waitlist-list .waitlist-entry {
   background-color: #fff;
   border: 1px solid var(--colour-line-soft);
   border-radius: var(--radius-md);
@@ -974,7 +976,7 @@ button:active {
   margin-bottom: var(--space-xs);
 }
 
-.waitlist-entry p {
+.waitlist-list .waitlist-entry p {
   margin: var(--space-2xs) 0;
 }
 
@@ -1457,16 +1459,17 @@ button:active {
   margin: var(--space-sm) 0;
 }
 
-.waitlist-entry {
+/* The owner's waitlist page; a family's own places use .waitlist-list (2A). */
+.waitlist-entries .waitlist-entry {
   border-top: 1px solid var(--colour-line-soft);
   padding: var(--space-sm) 0;
 }
 
-.waitlist-entry p {
+.waitlist-entries .waitlist-entry p {
   margin: 0 0 var(--space-2xs);
 }
 
-.waitlist-entry--offered {
+.waitlist-entries .waitlist-entry--offered {
   background-color: var(--colour-bg-warm);
   border-radius: var(--radius-sm);
   padding: var(--space-sm);
@@ -1690,10 +1693,6 @@ button:active {
 .email-log-filters label {
   flex: 1 1 11rem;
   font-size: 0.9rem;
-}
-
-.table-scroll {
-  overflow-x: auto;
 }
 
 /* On a phone each log row becomes a small labelled card. */
