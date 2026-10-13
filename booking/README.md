@@ -24,14 +24,27 @@ One Worker serves everything:
   symlinks and files over 25 MiB skipped). `npm run dev` and `npm run deploy`
   stage first; nothing else in the repository can be served (e2e-verified).
 - Dynamic routes run in the Worker against D1:
-  - `/book` — public class list by term; `/book/checkout` — child, price
-    breakdown (voucher, credits), pay in full or by instalments, waiver/
-    consent; `/book/confirm` — status-polling confirmation page;
-    `/book/cancelled` — expires the Stripe session, then releases seats.
-  - `/book/waitlist` — join a full term's waitlist.
+  - `/book` — public class list by term (term / "join for the remaining N
+    weeks" / casual / trial, returning-family window and price, waitlist
+    when full); `js/booking-picker.js` adds a running total to the casual
+    picker. `/book/checkout` — child, price breakdown (voucher, credits),
+    pay in full or by instalments, waiver/consent; `/book/confirm` —
+    status-polling confirmation page (`js/booking-status.js` polls
+    `/api/bookings/:id/status`); `/book/cancelled` — expires the Stripe
+    session, then releases seats (or keeps a pay-later hold);
+    `POST /book/checkout/release` — "cancel that payment and start again"
+    for the family's own unfinished checkout.
+  - `/book/waitlist` — a term's waitlist for the family: place in line, join
+    when the term is full (`POST /book/waitlist`), leave or decline an offer
+    (`POST /book/waitlist/leave`, which closes the offer's checkout and
+    releases the seat).
   - `/account` — parent dashboard (bookings with Pay now for held places,
-    payment status, Update card via Stripe's billing portal, credit balance,
-    waitlist entries), profile, child CRUD.
+    payment status and instalments, credit balance, waitlist entries),
+    profile, child CRUD. `/account/bookings/:id/pay` — Pay now for a held
+    place (an owner booking, waitlist offer or re-enrolment): waiver if not
+    yet accepted, pay in full or by instalments, one live hosted checkout at
+    a time. `POST /account/billing-portal` — Update card (Stripe Billing
+    Portal) for a running instalment plan.
   - `/auth/*` — magic-link request/verify (scanner-safe POST consume), logout.
   - `/admin/*` — schedule; terms (create with weekly sessions, edit, open/
     close, the families × weeks grid, re-run with auto-enrol); classes
@@ -46,8 +59,9 @@ One Worker serves everything:
   - `/api/stripe/webhook` — signature-verified; events are claimed before
     and marked done after handling (D6); `/api/bookings/:id/status` —
     owner-scoped polling.
-  - `/dev/*` — mock checkout (with instalment-plan simulations), mock billing
-    portal and mailbox, only when `ENVIRONMENT=development`.
+  - `/dev/*` — mock checkout (with instalment-plan simulations, including an
+    instalment whose webhook is lost), mock billing portal and mailbox (with
+    each email's Reply-To), only when `ENVIRONMENT=development`.
 - A cron trigger (every 15 minutes) runs `scheduled()` → `lib/cron.js`,
   which runs every job in `lib/jobs/*.js` (see
   [Scheduled jobs](#scheduled-jobs)).
@@ -111,7 +125,16 @@ Key invariants:
 - **Drivers**: `PAYMENTS_DRIVER=stripe|mock`, `EMAIL_DRIVER=resend|console`.
   The mock payments driver, the console email driver and the dev pages
   refuse to load unless `ENVIRONMENT=development`, and an unknown driver
-  name throws (fail-closed).
+  name throws (fail-closed). The payments driver's `listInvoices()` (Stripe
+  `GET /v1/invoices?subscription=…`; the mock reads the `dev_mock_invoices`
+  outbox the dev checkout writes) lets Check with Stripe add instalments
+  whose `invoice.paid` webhook was lost.
+- **Holds**: a pending booking held for at most 40 minutes is a checkout
+  hold (a parent paying now, 35 minutes); anything longer is a pay-later
+  hold paid with Pay now (owner bookings 7 days, waitlist offers 48 hours,
+  auto-enrolment until public opening or 7 days). `isCheckoutHold()` in
+  `lib/domain.js` is the one rule, and `createPendingBooking` refuses a
+  pay-later hold that would not clear it.
 - **Emails are idempotent**: every family or owner email goes through
   `notify.sendTemplate()`, which claims an `email_log` row by `dedupe_key`
   before sending — a job, webhook retry or double-click with the same key
@@ -126,6 +149,10 @@ Templates are pure functions in `lib/emails/*.js` returning
 tag, so a name typed by a family can never inject markup into an email, and
 subjects are forced onto one line.
 
+Mail is sent from `EMAIL_FROM` (`bookings@…`) with a **Reply-To** of
+`EMAIL_REPLY_TO` (else the first `ADMIN_EMAILS` address), so a family who
+"replies to this email" reaches the owner (`lib/email-driver.js`).
+
 | Email | Sent by | Dedupe key |
 | --- | --- | --- |
 | Booking confirmation (with plan schedule) | webhook / confirm paths → `notifyBookingConfirmed` | `booking_confirmed:<booking>` |
@@ -134,10 +161,14 @@ subjects are forced onto one line.
 | Waitlist offer | `/admin/waitlist/:id/offer` | `waitlist_offer:<entry>:<booking>` |
 | Failed instalment (Update card link) + owner alert | `invoice.payment_failed` → `notifyPlanFailed` | `plan_failed:<booking>:<invoice>` / owner per attempt |
 | Overdue-plan reminder (weekly) | job `overdueNudges` | `plan_overdue:<booking>:<ISO week>` |
-| Re-enrol invitation, offline-payment receipt | Phase 2B routes (`reenrolInvitation`, `offlineReceipt`) | set by the caller |
-| Trial follow-up | Phase 2A job | set by the caller |
+| Re-enrol invitation (returning-family price) | `/admin/terms/:id/auto-enrol` → `reenrolInvitation` | `reenrol:<term>:<child>` |
+| Place held — please pay (pay-later booking) | `/admin/bookings/new/details` → `payLaterHold` | `pay_later:<booking>` |
+| Offline-payment receipt | record payment / manual booking → `offlineReceipt` | `offline_receipt:<payment ref>` |
+| Trial follow-up | job `trialFollowUps` → `trialFollowUpEmail` | `trial_followup:<booking>` |
 | Bulk email | `/admin/email` → Send | `bulk:<batch>:<user>` |
 | Needs-attention alert | `notifyAttention` | `attention:<flag>:<booking>:<owner email>` |
+| Waitlist offer declined (owner) | `/book/waitlist/leave` | `waitlist_declined:<entry>:<booking>:<owner email>` |
+| Waitlist offer lapsed (owner) | job `expireOffers` | `offer_lapsed:<entry>:<booking>:<owner email>` |
 
 **Bulk email** (`/admin/email`): the owner picks an audience — a term's
 families (live bookings), a term's waitlist (waiting or offered), or every
@@ -164,9 +195,9 @@ others). Every job is idempotent and safe to overlap.
 | Job | File | What it does |
 | --- | --- | --- |
 | `sweepExpiredBookings` | `jobs/core.js` | Lapses pending holds past `expires_at`, giving back credit redemptions and voucher uses. |
-| `expireOffers` | `jobs/core.js` | Waitlist offers past their deadline: the held booking expires (seat released) and the entry returns to `waiting` with "Offer lapsed …" noted. |
+| `expireOffers` | `jobs/core.js` | Waitlist offers past their deadline: the held booking expires (seat released), the entry returns to `waiting` with "Offer lapsed …" noted, and the owner is emailed once. |
 | `purge` | `jobs/core.js` | Deletes sign-in tokens, web sessions, rate-limit windows and webhook events older than 30 days. |
-| trial follow-ups | `jobs/parent.js` | Phase 2A: the day after a trial, offer the rest of the term. |
+| `trialFollowUps` | `jobs/parent.js` | Confirmed trials whose class started 20 hours to 7 days ago, attended or unmarked, in an open term with weeks to come and no term booking yet: one email offering the rest of the term at the pro-rata price (the same `prepareBooking` quote as the checkout), or its waitlist when full. |
 | `sendReminders` | `jobs/ops.js` | Confirmed bookings' booked rows in scheduled sessions starting 20–28 h ahead: one reminder per (session, booking). |
 | `overdueNudges` | `jobs/ops.js` | Plans still `plan_overdue` (not `plan_ended_short`) and behind schedule: a reminder with the shortfall at most every 7 days and once per Sydney ISO week. |
 | `reconcileWaitlist` | `jobs/ops.js` | Entries whose offer booking is confirmed become `booked` (a safety net — `confirmBooking` already does this). |
@@ -201,7 +232,7 @@ others). Every job is idempotent and safe to overlap.
 ```bash
 cd booking
 npm ci                      # wrangler only
-npm run migrate:local       # apply D1 schema
+npm run migrate:local       # apply D1 schema (0002 adds dev-only outbox columns/tables)
 npm run seed:local          # two weekly slots with open terms, a voucher
 npm run dev                 # stages public/, then http://localhost:8787
 ```
@@ -213,6 +244,7 @@ Local conveniences (all `ENVIRONMENT=development` only, from `.dev.vars`):
 - **Payments**: the mock driver redirects to `/dev/mock-checkout`, which
   posts synthetic Stripe events through the same webhook processing — pay
   now, cancel, and for instalment plans "next instalment paid" /
+  "instalment paid, webhook lost" (then try Check with Stripe) /
   "instalment failed" / "plan ended".
 - **Staff**: sign in as the `STAFF_EMAILS` address (`.dev.vars`) to see the
   roster-only role.
@@ -222,24 +254,39 @@ Local conveniences (all `ENVIRONMENT=development` only, from `.dev.vars`):
 ## Tests
 
 ```bash
-npm test      # unit tests: pricing, ledger, booking domain (races,
-              # credits, vouchers, guarded confirmation), webhooks (claim
-              # ordering, retries, plans, refunds), Stripe driver, escaping,
-              # validation, Sydney time/DST, roles, cron, notify, ops emails,
-              # session-cancelled/plan-failed notices, reminders and nudges,
-              # waitlist offers, bulk email, admin authz/CSRF — D1 via
-              # miniflare, which wrangler already bundles
-npm run e2e   # stages assets, boots a fresh wrangler dev + database, runs
-              # test/e2e/journeys/*.js (publishing, parent, plans,
-              # isolation/roles, admin, cron, waitlist offers, reminders,
-              # bulk email); `npm run e2e -- ops` runs matching journeys only
+npm test      # 264 unit tests: pricing, ledger, booking domain (races,
+              # credits, vouchers, guarded confirmation, hold rules, trials),
+              # webhooks (claim ordering, retries, plans, refunds), Stripe
+              # driver (incl. listInvoices), Check with Stripe reconciliation,
+              # escaping, validation, Sydney time/DST, roles and the admin
+              # nav, cron, notify and Reply-To, ops emails, session-cancelled/
+              # plan-failed notices, reminders and nudges, waitlist offers and
+              # order, bulk email, admin authz/CSRF — D1 via miniflare, which
+              # wrangler already bundles
+npm run e2e   # 622 checks: stages assets, boots a fresh wrangler dev +
+              # database, runs test/e2e/journeys/*.js (publishing, parent,
+              # plans, isolation/roles, admin, cron, waitlist offers,
+              # reminders, bulk email, and the x-* cross-feature journeys);
+              # `npm run e2e -- ops` runs matching journeys only
 ```
 
 Journeys share one server and database and run in file-name order
-(`admin-*`, `core-*`, `ops-*`, `parent-*`), so each uses its own addresses and
-data (the `ops-*` journeys create their own draft/closed terms). The owner's
-address may request only 3 sign-in links an hour, so journeys that act as the
-owner beyond the first sign-in mint the owner's web session in SQL.
+(`admin-*`, `core-*`, `ops-*`, `parent-*`, then `x-*`), so each uses its own
+addresses and data (the `ops-*` and `x-*` journeys create their own classes
+and terms). The owner's address may request only 3 sign-in links an hour, so
+the run shares one owner sign-in (`ctx.adminCookie`) and some journeys mint
+web sessions in SQL.
+
+The `x-*` journeys (helpers in `test/e2e/support.js`) cross the feature
+areas: an instalment plan with a week transferred and a lost instalment
+webhook found by Check with Stripe (`x-10`); the waitlist from a full term to
+a paid offer, a lapsed offer and a declined one (`x-20`); re-run → auto-enrol
+→ the returning family pays at the returning price while a new family waits
+for the public opening (`x-30`); a payment after the hold lapsed →
+`paid_no_seat` → a credit (`x-40`); a cancelled class → credits, notices and
+the credit at the next checkout, then one reminder per family (`x-50`); the
+facilitator's roster-only role (`x-60`); staged scripts and private files
+(`x-70`).
 
 ## Related documents
 

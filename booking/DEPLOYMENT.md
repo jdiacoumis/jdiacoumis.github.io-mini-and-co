@@ -42,7 +42,8 @@ Plain vars (in `wrangler.toml [vars]`):
 | `ENVIRONMENT` | `production` (the mock payments driver, console email driver and `/dev/*` pages refuse to run otherwise) |
 | `EMAIL_DRIVER` / `PAYMENTS_DRIVER` | `resend` / `stripe` (an unknown value fails closed) |
 | `PUBLIC_BASE_URL` | The site's address, used in every email link (account, Pay now, Update card) and in Stripe return URLs |
-| `EMAIL_FROM` | `Mini & Co. <bookings@miniandcosensoryclasses.com>` — must be a verified Resend domain, and must receive replies (step 4) |
+| `EMAIL_FROM` | `Mini & Co. <bookings@miniandcosensoryclasses.com>` — must be a verified Resend domain (it need not receive mail — see `EMAIL_REPLY_TO`) |
+| `EMAIL_REPLY_TO` | Where families' replies go: every email carries this Reply-To (`miniandco.classes@gmail.com`). Blank = the first `ADMIN_EMAILS` address (step 4) |
 | `ADMIN_EMAILS` | Comma-separated admin sign-in addresses (the owner) |
 | `STAFF_EMAILS` | Comma-separated facilitators: rosters and attendance only |
 | `META_PIXEL_ID`, `WAIVER_VERSION` | Pixel id; version string of the current waiver text |
@@ -110,20 +111,23 @@ instalments, class-cancelled summaries) at every `ADMIN_EMAILS` address.
    (`bookings@miniandcosensoryclasses.com`).
 4. **Make replies reach Camila.** Families are told to "reply to this email"
    (confirmations, reminders, class-cancelled notices, waitlist offers,
-   failed payments), and the email driver sets no separate Reply-To, so
-   `bookings@…` must receive mail: Cloudflare dashboard → the zone → **Email
-   → Email Routing** (check) → enable, then add a route
-   `bookings@miniandcosensoryclasses.com` → `miniandco.classes@gmail.com`
-   (verify the Gmail address when asked). Send a test email to `bookings@…`
-   and check it arrives.
+   pay-later holds, failed payments). Every email the system sends carries a
+   **Reply-To** of `EMAIL_REPLY_TO` (`miniandco.classes@gmail.com` in
+   `wrangler.toml`; blank falls back to the first `ADMIN_EMAILS` address), so
+   replies land in the Gmail inbox even though `bookings@…` sends them. To
+   also catch people who write to `bookings@…` directly (optional):
+   Cloudflare dashboard → the zone → **Email → Email Routing** (check) →
+   enable, then add a route `bookings@miniandcosensoryclasses.com` →
+   `miniandco.classes@gmail.com` (verify the Gmail address when asked).
 
 ## 5. Scheduled jobs (cron)
 
 `wrangler.toml` has `[triggers] crons = ["*/15 * * * *"]`, deployed with the
 Worker — nothing else to set up. Every 15 minutes `scheduled()` runs, in
-order: `sweepExpiredBookings`, `expireOffers`, `purge`, the trial follow-up
-job, `sendReminders`, `overdueNudges`, `reconcileWaitlist` (README →
-Scheduled jobs). Every job is idempotent, so a missed or doubled run is
+order: `sweepExpiredBookings`, `expireOffers` (the owner is emailed about
+each lapsed offer), `purge`, `trialFollowUps`, `sendReminders`,
+`overdueNudges`, `reconcileWaitlist` (README → Scheduled jobs). Every job is
+idempotent, so a missed or doubled run is
 harmless; reminders go out 20–28 hours before a class, so an outage shorter
 than 8 hours loses none.
 
@@ -154,7 +158,7 @@ Verify on the `workers.dev` URL with Stripe in test mode:
 1. Marketing pages render; `/booking/src/index.js`, `/openspec/…` and
    `/.dev.vars` are 404.
 2. Sign in via magic link (real email through Resend); reply to it and check
-   the reply reaches the Gmail inbox (step 4.4).
+   the reply reaches the Gmail inbox (the Reply-To, step 4.4).
 3. Create a term (both classes), open it, and book it as a parent: pay in
    full with `4242…` → the confirmation page flips to paid, the confirmation
    email arrives, the booking shows Paid in the term grid, and the webhook
@@ -164,6 +168,28 @@ Verify on the `workers.dev` URL with Stripe in test mode:
    `4000 0000 0000 0341` (or Stripe's test clocks): the family gets "Payment
    didn't go through", the owner gets an alert, the booking is under Needs
    attention; "Update card" opens Stripe's portal without a cancel button.
+   Then verify **the plan stops after exactly n instalments** — the
+   subscription's `cancel_at` (set when the checkout completes, to the end of
+   the n-th billing period: `planCancelAt` in `lib/pricing.js`) — with a
+   short-interval run on a Stripe **test clock** before go-live:
+   1. Make a test term with a **2-instalment** plan (Instalments 2, weekly)
+      and a test family.
+   2. Stripe dashboard (test mode) → Billing → **Test clocks** → new
+      simulation, frozen at now → add a customer (the test family's email).
+      Link it to the family so the checkout reuses it:
+      `npx wrangler d1 execute miniandco-booking --remote --command "UPDATE users SET stripe_customer_id = 'cus_…' WHERE email = '…'"`.
+   3. Book the term by instalments, pay with `4242…`. In Stripe the
+      subscription shows **Cancels** on the first payment's date + 2 weeks;
+      the grid shows "Plan 1 of 2".
+   4. Advance the clock one week: the second invoice is paid →
+      `invoice.paid` → the grid shows **Paid** (plan complete).
+   5. Advance it past the cancel date (and a further week): the subscription
+      is **cancelled** (`customer.subscription.deleted`, 200 in the webhook
+      log) with **no third invoice and no proration** line on any invoice,
+      and the booking stays complete (not "ended short").
+   If Stripe raised an extra invoice, prorated the last one or ended the plan
+   early, stop: `planCancelAt` must change (design D4's alternative is
+   start + (n − 1) × interval + 12 hours) and this test be repeated.
 5. Waitlist: fill a week (set its capacity to the bookings it has), join the
    waitlist as a parent, offer the place from `/admin/waitlist`, pay it from
    the account page; the entry shows Booked.
@@ -219,4 +245,7 @@ Verify on the `workers.dev` URL with Stripe in test mode:
 - **Webhook outage**: confirmation pages poll booking status and Stripe
   retries webhooks for days. A booking stuck waiting after a real payment
   appears under **Needs attention** after 40 minutes; **Check with Stripe**
-  confirms it through the same guarded path (check).
+  replays Stripe's record through the webhook's own handlers (the same
+  capacity-guarded confirmation, ledger rows keyed on Stripe ids, so nothing
+  is recorded twice) — and for an instalment plan it lists the subscription's
+  invoices and adds any paid instalment whose `invoice.paid` never arrived.

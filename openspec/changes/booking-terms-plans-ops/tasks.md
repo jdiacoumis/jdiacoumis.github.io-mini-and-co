@@ -42,7 +42,7 @@
 
 ## 3. Integration and verification (Phase 3)
 
-- [ ] 3.1 Merge the three Phase 2 branches; unit and e2e suites green; cross-feature e2e journeys (plan + transfer, waitlist offer → pay, re-run → returning family pays at returning price, late payment after hold → seat re-check)
+- [x] 3.1 Merge the three Phase 2 branches; unit and e2e suites green; cross-feature e2e journeys (plan + transfer, waitlist offer → pay, re-run → returning family pays at returning price, late payment after hold → seat re-check)
 - [ ] 3.2 Adversarial review across lenses (authz incl. staff role, CSRF, webhook ordering, money maths, DST) and fixes
 - [ ] 3.3 PR description rewritten; branch pushed
 

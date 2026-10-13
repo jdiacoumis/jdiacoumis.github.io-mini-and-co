@@ -8,8 +8,7 @@ returning families are invited to re-enrol.
 
 The import is **idempotent** — re-running it with the same file never creates
 duplicates — and nothing is written until you explicitly commit a previewed
-file. Steps marked **(check)** use admin screens built in Phase 2B; follow the
-screen if it differs.
+file. Screen and button names are as in OWNER-GUIDE.md.
 
 ## 1. Create the terms first
 
@@ -19,11 +18,14 @@ come.
 
 1. `/admin/classes` — both weekly slots exist ("Sensory Play — Wednesday
    11:00 am" and "… 1:00 pm"); create them if not.
-2. **Terms → New term** (check) — create **Term 1 2027** for both classes:
-   dates and holiday weeks, term/casual/trial prices, the returning price and
-   its opening time, the public opening time, and instalments. Leave it as a
-   **Draft** until the invitations have gone out. (If you choose option A in
-   step 6, create Term 1 2027 there instead, by re-running Term 4 2026.)
+2. **Terms → New term** — create **Term 1 2027** for one class and tick the
+   other under **Also create the same term for**: first class date and weeks
+   (or last class date) and holiday dates, term/casual/trial prices, the
+   returning price and its opening time, the public opening time, and
+   instalments (OWNER-GUIDE.md §3). Leave it as a **Draft** (don't tick "Open
+   for bookings straight away") until the invitations have gone out. (If you
+   choose option A in step 6, create Term 1 2027 there instead, by re-running
+   Term 4 2026.)
 
 ## 2. Export from ClassForKids and prepare the CSV
 
@@ -96,7 +98,7 @@ current waiver the first time they book.
 
 Choose one:
 
-### Option A — places held at the returning price (check)
+### Option A — places held at the returning price
 
 The system treats a family as **returning** when they hold a confirmed term
 booking in the term before. To give Term 4 families that status:
@@ -109,15 +111,18 @@ booking in the term before. To give Term 4 families that status:
    will list them. These families will also get this system's day-before
    reminder for those weeks, so import in the final week (or tell them to
    expect it).
-3. **Terms → Term 4 2026 → Re-run** to create Term 1 2027 from it (dates,
-   prices, returning price, opening times), then **Auto-enrol**: each Term 4
-   family gets a place held at the returning price until public opening (or 7
-   days) and the email "<child>'s place in Term 1 2027 is saved — pay by
-   <date>" with a Pay now link. Creating Term 1 2027 this way links it to
-   Term 4 2026 as its previous term, which is what makes these families
-   "returning".
-4. **Open** Term 1 2027. Returning families book from the returning window;
-   unpaid held places are released automatically at public opening.
+3. **Terms → Term 4 2026 → Re-run term** to create Term 1 2027 from it (check
+   the first class date — the copy starts two empty weeks after Term 4 — and set
+   the prices, returning price and opening times) → **Create the new term**,
+   then **Hold places and send invitations** for the ticked families: each
+   Term 4 family gets a place held at the returning price until public opening
+   (or 7 days) and the email "<child>'s place in Term 1 2027 is saved — pay by
+   <date>" (at "your returning-family price") with a Pay now link. Creating
+   Term 1 2027 this way links it to Term 4 2026 as its previous term, which is
+   what makes these families "returning". Do it for each class's Term 4.
+4. **Open for bookings** on Term 1 2027. Returning families book from the
+   returning window; everyone else sees "Bookings open …" until public
+   opening, when unpaid held places are released automatically.
 
 ### Option B — families book themselves (simplest)
 
