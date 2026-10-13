@@ -682,6 +682,287 @@ button:active {
 
 /* === 2A parent flow (routes/booking.js, account.js, waitlist.js) — start === */
 
+/* Parent pages wrap their body in .parent-flow. Every control is a
+   comfortable touch target (44 px), mobile first. */
+
+.parent-flow button,
+.parent-flow .button-link {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  line-height: 1.3;
+}
+
+.parent-flow button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.parent-flow summary {
+  padding: var(--space-xs) 0;
+  cursor: pointer;
+}
+
+.parent-flow .session-option label,
+.parent-flow .consent-group label {
+  min-height: 44px;
+  align-items: center;
+}
+
+.parent-flow .choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-xs);
+  min-height: 44px;
+  padding: var(--space-2xs) 0;
+  cursor: pointer;
+}
+
+.parent-flow .choice input {
+  width: auto;
+  flex-shrink: 0;
+  margin: 0.35rem 0 0;
+}
+
+.parent-flow .choice-disabled {
+  color: var(--colour-text-muted);
+  cursor: default;
+}
+
+.parent-flow .inline-form {
+  margin: var(--space-2xs) var(--space-xs) var(--space-2xs) 0;
+}
+
+/* Alerts and notes */
+
+.pf-alert {
+  background-color: var(--colour-bg-blush);
+  border: 1px solid var(--colour-accent-blush);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+  margin: var(--space-sm) 0;
+}
+
+.pf-alert ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.pf-alert li + li {
+  margin-top: var(--space-2xs);
+}
+
+/* Class list */
+
+.term-notes {
+  list-style: none;
+  margin: var(--space-xs) 0;
+  padding: var(--space-xs) var(--space-sm);
+  background-color: var(--colour-bg-sage);
+  border-radius: var(--radius-sm);
+}
+
+.term-window,
+.term-early {
+  background-color: var(--colour-bg-warm);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.term-full p {
+  margin: var(--space-2xs) 0;
+}
+
+.trial-line p {
+  margin: var(--space-2xs) 0;
+}
+
+.trial-dates ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.trial-dates a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+.casual-total {
+  font-weight: 500;
+  min-height: 1.5em;
+  margin: var(--space-xs) 0;
+}
+
+.casual-total:empty {
+  margin: 0;
+}
+
+.one-off-group .session-list {
+  margin-top: 0;
+}
+
+/* Checkout and Pay now */
+
+.checkout-child {
+  font-size: 0.95rem;
+  margin: 0 0 var(--space-xs);
+}
+
+.child-unavailable {
+  display: inline-block;
+  padding: var(--space-xs) 0;
+  color: var(--colour-text-muted);
+}
+
+.child-choices {
+  border: 1px solid var(--colour-line);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+}
+
+.plan-dates {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-xs) 0;
+}
+
+.plan-dates li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: var(--space-2xs) 0;
+  border-bottom: 1px solid var(--colour-line-soft);
+}
+
+.plan-dates .plan-paid {
+  color: var(--colour-text-muted);
+}
+
+/* Account */
+
+.booking-cards {
+  display: grid;
+  gap: var(--space-sm);
+  margin: var(--space-sm) 0;
+}
+
+.booking-card {
+  background-color: #fff;
+  border: 1px solid var(--colour-line-soft);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+  padding: var(--space-sm) var(--space-md);
+}
+
+.booking-card-alert {
+  border-color: var(--colour-accent-blush);
+}
+
+.booking-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2xs) var(--space-xs);
+}
+
+.booking-card-head h3 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 1.25rem;
+  margin: 0;
+}
+
+.booking-card p {
+  margin: var(--space-2xs) 0;
+}
+
+.booking-card-meta {
+  color: var(--colour-text-soft);
+}
+
+.booking-card-when {
+  font-size: 0.95rem;
+}
+
+.pay-status {
+  padding-left: var(--space-xs);
+  border-left: 3px solid var(--colour-accent-sage);
+}
+
+.pay-status-due {
+  border-left-color: var(--colour-accent-blush);
+}
+
+.pay-status-alert {
+  border-left-color: #a04545;
+}
+
+.pay-status-muted {
+  border-left-color: var(--colour-line);
+  color: var(--colour-text-muted);
+}
+
+.booking-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs) var(--space-sm);
+  margin-top: var(--space-xs);
+}
+
+.booking-card-actions .inline-form {
+  margin: 0;
+}
+
+.booking-card-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+.earlier-bookings {
+  margin-top: var(--space-sm);
+}
+
+.update-card {
+  margin-top: var(--space-sm);
+}
+
+.credit-list,
+.waitlist-list {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-xs) 0;
+}
+
+.credit-list li {
+  padding: var(--space-2xs) 0;
+  border-bottom: 1px solid var(--colour-line-soft);
+}
+
+.waitlist-entry {
+  background-color: #fff;
+  border: 1px solid var(--colour-line-soft);
+  border-radius: var(--radius-md);
+  padding: var(--space-xs) var(--space-sm);
+  margin-bottom: var(--space-xs);
+}
+
+.waitlist-entry p {
+  margin: var(--space-2xs) 0;
+}
+
+@media (min-width: 720px) {
+  .booking-card {
+    padding: var(--space-md) var(--space-lg);
+  }
+}
+
 /* === 2A parent flow — end === */
 
 /* === 2B admin operations (routes/admin*.js) — start === */
