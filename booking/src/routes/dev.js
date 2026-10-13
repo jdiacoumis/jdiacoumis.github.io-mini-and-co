@@ -226,7 +226,7 @@ export async function handleDevMailbox(req, env) {
   const filter = isValidEmail(to) ? to : null;
 
   const emails = (await env.DB.prepare(
-    `SELECT id, to_email, subject, body_text, created_at FROM dev_emails
+    `SELECT id, to_email, subject, body_text, reply_to, created_at FROM dev_emails
      WHERE ?1 IS NULL OR to_email = ?1
      ORDER BY id DESC LIMIT 20`,
   ).bind(filter).all()).results || [];
@@ -234,7 +234,7 @@ export async function handleDevMailbox(req, env) {
   const items = emails.map((e) => html`
     <article class="class-card">
       <h2>${e.subject}</h2>
-      <p class="class-meta">To ${e.to_email} · ${e.created_at}</p>
+      <p class="class-meta">To ${e.to_email}${e.reply_to ? html` · Reply-To ${e.reply_to}` : ''} · ${e.created_at}</p>
       <pre class="mail-body">${linkifyBody(e.body_text)}</pre>
     </article>
   `);

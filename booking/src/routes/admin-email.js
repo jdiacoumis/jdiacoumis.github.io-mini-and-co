@@ -37,9 +37,12 @@ export const SUBJECT_MAX = 150;
 export const BODY_MAX = 5000;
 const LOG_PAGE_SIZE = 50;
 
-// What each email_log.template means, in the owner's words.
+// What each email_log.template means, in the owner's words: one entry per
+// template name the code sends (a unit test checks every `template:` in
+// src/ has a label here).
 export const TEMPLATE_LABELS = {
   booking_confirmed: 'Booking confirmation',
+  pay_later_hold: 'Place held — please pay (your booking)',
   reminder: 'Class reminder (day before)',
   session_cancelled: 'Class cancelled',
   waitlist_offer: 'Waitlist offer',
@@ -47,12 +50,14 @@ export const TEMPLATE_LABELS = {
   plan_overdue: 'Overdue payment reminder',
   reenrol_invitation: 'Re-enrol invitation',
   offline_receipt: 'Payment receipt',
-  trial_follow_up: 'Trial follow-up',
+  trial_followup: 'Trial follow-up',
   bulk: 'Your message to families',
   owner_alert: 'Alert to you',
   owner_attention: 'Needs attention — alert to you',
   owner_plan_failed: 'Payment failed — alert to you',
   owner_session_cancelled: 'Class cancelled — summary to you',
+  owner_waitlist_declined: 'Waitlist place declined — alert to you',
+  owner_offer_lapsed: 'Waitlist offer lapsed — alert to you',
 };
 
 export function templateLabel(template) {

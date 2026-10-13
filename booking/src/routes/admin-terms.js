@@ -983,6 +983,7 @@ export async function handleAdminAutoEnrolPost(req, env, params) {
       const message = reenrolInvitation({
         parentName: c.parentName, childName: c.childName, termName: term.name, className: term.class_name,
         amountCents: enrolled.amountCents, payByAt: enrolled.expiresAt, accountUrl,
+        returning: term.returning_price_cents !== null && term.returning_price_cents !== undefined,
       });
       mail = await sendTemplate(env, {
         template: 'reenrol_invitation', to: c.parentEmail, userId: c.userId, bookingId: enrolled.bookingId,

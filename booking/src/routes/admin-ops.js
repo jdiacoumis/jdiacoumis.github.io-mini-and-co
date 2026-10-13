@@ -32,7 +32,7 @@ import { issueCredit, voidCredit } from '../lib/ledger.js';
 import { normaliseVoucherCode } from '../lib/pricing.js';
 import { getPaymentsDriver } from '../lib/payments-driver.js';
 import { sendTemplate, notifyBookingConfirmed } from '../lib/notify.js';
-import { offlineReceipt } from '../lib/emails/ops.js';
+import { offlineReceipt, payLaterHold } from '../lib/emails/ops.js';
 import { processStripeEvent } from './webhooks.js';
 import { logEvent, logError } from '../lib/log.js';
 import {
@@ -43,7 +43,6 @@ import {
 
 const OFFLINE_METHODS = ['cash', 'bank transfer', 'card (in person)', 'other'];
 const MAX_SESSIONS = 20;
-const SIGN_OFF = 'Warmly,\nCamila — Mini & Co. Sensory Classes';
 
 // --- Manual bookings ---------------------------------------------------------------
 
@@ -411,19 +410,6 @@ export async function handleAdminNewBookingDetails(req, env) {
   return newBookingStep2(env, user, ctx, readStep2Choices(url.searchParams));
 }
 
-function payLaterEmail({ parentName, childName, what, amountCents, expiresAt, accountUrl }) {
-  const lines = [
-    `Hi ${parentName || 'there'},`,
-    `We've saved a place for ${childName}: ${what}.`,
-    `To keep it, sign in and press Pay now (${formatAud(amountCents)}) before ${formatSydney(expiresAt)}. After that the place is released to other families.`,
-    `Sign in here: ${accountUrl}`,
-  ];
-  return {
-    subject: `${childName}'s place is saved — please pay by ${formatSydney(expiresAt, 'date')}`,
-    text: `${lines.join('\n\n')}\n\n${SIGN_OFF}`,
-    html: html`${joinHtml(lines.map((line) => html`<p>${line}</p>`))}<p>Warmly,<br>Camila — Mini &amp; Co. Sensory Classes</p>`,
-  };
-}
 
 // The family's emails after an owner-made booking: a receipt for money
 // received, the confirmation for a confirmed booking, the Pay now request
@@ -434,7 +420,7 @@ async function emailFamilyAboutNewBooking(env, bookingId, outcome) {
   const accountUrl = `${env.PUBLIC_BASE_URL}/account`;
   try {
     if (outcome.mode === 'paylater' && !outcome.confirmed) {
-      const message = payLaterEmail({
+      const message = payLaterHold({
         parentName: booking.parent_name, childName: booking.child_name, what: describeBooking(booking),
         amountCents: outcome.owedCents, expiresAt: booking.expires_at, accountUrl,
       });

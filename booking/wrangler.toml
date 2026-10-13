@@ -30,6 +30,9 @@ EMAIL_DRIVER = "resend"
 PAYMENTS_DRIVER = "stripe"
 PUBLIC_BASE_URL = "https://miniandcosensoryclasses.com"
 EMAIL_FROM = "Mini & Co. <bookings@miniandcosensoryclasses.com>"
+# Replies to every email the system sends go here (families are told to
+# "reply to this email"); blank = the first ADMIN_EMAILS address.
+EMAIL_REPLY_TO = "miniandco.classes@gmail.com"
 ADMIN_EMAILS = "miniandco.classes@gmail.com"
 # Facilitators: roster + attendance only. Comma-separated; re-checked on every request.
 STAFF_EMAILS = ""

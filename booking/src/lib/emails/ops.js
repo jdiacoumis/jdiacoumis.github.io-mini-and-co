@@ -120,6 +120,23 @@ export function reenrolInvitation({
   ]);
 }
 
+// A place the owner booked for a family (by phone or in person) and held
+// until expiresAt for them to pay from their account with Pay now — the
+// manual pay-later booking (routes/admin-ops.js). `what` describes the
+// booking ("Term — Term 1 2027, Sensory Play — Wednesday 11:00 am (…)").
+export function payLaterHold({
+  parentName, childName, what = '', amountCents, expiresAt, accountUrl = '',
+}) {
+  return build(`${possessive(childName)} place is saved — please pay by ${formatSydney(expiresAt, 'date')}`, [
+    greeting(parentName),
+    `We've saved a place for ${childName}${what ? `: ${what}` : ''}.`,
+    `To keep it, sign in and press Pay now (${formatAud(amountCents)}) before ${formatSydney(expiresAt)}. `
+      + 'After that the place is released to other families.',
+    'Any questions? Just reply to this email.',
+    accountUrl ? { lead: 'Sign in here:', href: accountUrl, label: 'Go to my account' } : null,
+  ]);
+}
+
 // Waitlist offer: a seat is held until expiresAt. `detail` says what is on
 // offer ("the rest of the term — 4 weeks, …").
 export function waitlistOffer({

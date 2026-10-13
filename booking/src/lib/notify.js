@@ -31,11 +31,13 @@ import { sessionCancelled, planFailed } from './emails/ops.js';
 //   template: short name for the log ('booking_confirmed', 'reminder', …)
 //   dedupeKey: e.g. 'reminder:<session>:<booking>' — a second call with the
 //              same key is skipped (unless the first attempt failed)
+//   replyTo:   where replies go; omitted → the owner (EMAIL_REPLY_TO, else
+//              the first ADMIN_EMAILS address — lib/email-driver.js)
 // Returns { sent: true, id } | { skipped: true } | { sent: false, error }.
 // Never throws for delivery problems (callers are jobs and webhooks).
 export async function sendTemplate(env, {
   template, to, userId = null, bookingId = null, sessionId = null, termId = null,
-  dedupeKey = null, subject, text, html: htmlBody = '',
+  dedupeKey = null, subject, text, html: htmlBody = '', replyTo = undefined,
 }) {
   const email = normaliseEmail(to);
   if (!isValidEmail(email)) return { sent: false, error: 'invalid_recipient' };
@@ -59,7 +61,7 @@ export async function sendTemplate(env, {
   }
 
   try {
-    const providerRef = await sendEmail(env, email, subject, text, String(htmlBody || ''));
+    const providerRef = await sendEmail(env, email, subject, text, String(htmlBody || ''), { replyTo });
     if (providerRef) {
       await env.DB.prepare(`UPDATE email_log SET provider_ref = ?2 WHERE id = ?1`).bind(id, String(providerRef)).run();
     }
