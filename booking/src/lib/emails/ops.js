@@ -91,7 +91,8 @@ export function sessionCancelled({
   parentName, childName, className, startsAt, reason = '', creditCents = 0, accountUrl = '',
 }) {
   const why = String(reason || '').trim();
-  return build(`Class cancelled: ${className}, ${formatSydney(startsAt, 'date')}`, [
+  // Subject unchanged from Phase 1 (other modules' tests may look for it).
+  return build(`Class cancelled: ${className} ${formatSydney(startsAt, 'date')}`, [
     greeting(parentName),
     `We're sorry to let you know that ${className} on ${formatSydney(startsAt)} has been cancelled${why ? ` (${why})` : ''}.`,
     creditCents > 0
@@ -164,7 +165,8 @@ export function offlineReceipt({
   parentName, childName, amountCents, method = 'payment', paidAt, summary = '', accountUrl = '',
 }) {
   const how = RECEIPT_METHODS[String(method || '').toLowerCase()] || '';
-  return build(`Receipt: ${formatAud(amountCents)} received — thank you`, [
+  // Subject unchanged from Phase 1 (Phase 2B's tests may look for it).
+  return build(`Receipt: ${formatAud(amountCents)} received`, [
     greeting(parentName),
     `Thank you — we've received ${formatAud(amountCents)}${how ? ` ${how}` : ''} on ${formatSydney(paidAt, 'date')} `
       + `for ${possessive(childName)} classes${summary ? ` (${summary})` : ''}.`,

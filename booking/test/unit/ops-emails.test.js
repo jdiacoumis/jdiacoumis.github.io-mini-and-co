@@ -59,7 +59,7 @@ test("possessives follow Australian style (James's)", () => {
 
 test('session cancelled: credit amount when given, a plain line when not', () => {
   const credited = sessionCancelled({ parentName: 'Jo', childName: 'Edie', className: 'Sensory Play', startsAt: STARTS, reason: 'venue closed', creditCents: 2800, accountUrl: ACCOUNT });
-  assert.equal(credited.subject, `Class cancelled: Sensory Play, ${formatSydney(STARTS, 'date')}`);
+  assert.equal(credited.subject, `Class cancelled: Sensory Play ${formatSydney(STARTS, 'date')}`);
   assert.ok(credited.text.includes('has been cancelled (venue closed).'));
   assert.ok(credited.text.includes('credit of $28.00'));
   const none = sessionCancelled({ parentName: 'Jo', childName: 'Edie', className: 'Sensory Play', startsAt: STARTS });
@@ -102,7 +102,7 @@ test('re-enrol invitation keeps its contract (Phase 2B) and says the returning p
 
 test('offline receipt: amount, method, date and summary', () => {
   const m = offlineReceipt({ parentName: 'Jo', childName: 'Edie', amountCents: 16800, method: 'bank transfer', paidAt: STARTS, summary: 'Term 1 2027', accountUrl: ACCOUNT });
-  assert.equal(m.subject, 'Receipt: $168.00 received — thank you');
+  assert.equal(m.subject, 'Receipt: $168.00 received');
   assert.ok(m.text.includes(`$168.00 by bank transfer on ${formatSydney(STARTS, 'date')} for Edie's classes (Term 1 2027)`));
   const other = offlineReceipt({ parentName: 'Jo', childName: 'Edie', amountCents: 3000, method: 'other', paidAt: STARTS });
   assert.ok(other.text.includes('received $30.00 on'), other.text);

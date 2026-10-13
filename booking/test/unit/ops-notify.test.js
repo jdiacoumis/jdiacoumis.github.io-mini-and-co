@@ -103,7 +103,7 @@ test('a cancelled session emails each affected family once, with their credit, a
   assert.equal(mail.length, 2, 'one email per booking (two children)');
   assert.ok(mail.some((m) => m.body_text.includes('credit of $28.00') && m.body_text.includes('Child 0')));
   assert.ok(mail.some((m) => m.body_text.includes('credit of $30.00') && m.body_text.includes('Child 1')));
-  assert.ok(mail.every((m) => m.subject.startsWith('Class cancelled: Sensory Play,') && m.body_text.includes('(venue closed)')));
+  assert.ok(mail.every((m) => m.subject.startsWith('Class cancelled: Sensory Play ') && m.body_text.includes('(venue closed)')));
   const kit = await one(`SELECT body_text, body_html FROM dev_emails WHERE to_email = 'sc-casual@example.com'`);
   assert.ok(kit.body_text.includes('credit of $30.00 to your account for <b>Kit</b>'));
   assert.ok(kit.body_html.includes('&lt;b&gt;Kit&lt;/b&gt;') && !kit.body_html.includes('<b>Kit</b>'));
