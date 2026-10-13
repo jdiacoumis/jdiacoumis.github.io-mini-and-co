@@ -307,7 +307,26 @@ export async function handlePreviewPost(req, env) {
   return pageResponse('Check your email', body, { user, admin: true });
 }
 
-// POST /admin/email/send — send the previewed batch, one email per parent.
+// Emails sent per request: each is two database writes and one call to
+// Resend, and Cloudflare caps both per request (README → Limits). A larger
+// audience is sent in steps: the page carries on by itself
+// (js/admin-continue.js), or the owner presses Continue.
+export const BULK_PER_REQUEST = 12;
+const AUTO_CONTINUE_HEAD = html`<script src="/js/admin-continue.js" defer></script>`;
+
+// This batch's log rows: userId → status.
+async function batchStatuses(env, batch) {
+  const prefix = `bulk:${batch}:`;
+  const rows = (await env.DB.prepare(
+    `SELECT dedupe_key, status FROM email_log WHERE substr(dedupe_key, 1, length(?1)) = ?1`,
+  ).bind(prefix).all()).results || [];
+  return new Map(rows.map((r) => [r.dedupe_key.slice(prefix.length), r.status]));
+}
+
+// POST /admin/email/send — send the previewed batch, one email per parent,
+// at most BULK_PER_REQUEST per request. Send (and Try again) covers everyone
+// not yet sent, failed sends included; the automatic Continue (step=continue)
+// only those never tried, so a failing address can't loop.
 export async function handleSendPost(req, env) {
   const user = await requireAdmin(req, env);
   const form = await parseForm(req);
@@ -323,37 +342,76 @@ export async function handleSendPost(req, env) {
   if (!ok) return composePage(env, user, { values, error: 'Please choose a term.', status: 400 });
 
   const recipients = await audienceRecipients(env, { audience: values.audience, termId: term ? term.id : null });
-  const { outcomes, sent, skipped, failed } = await sendBulk(env, {
-    batchId: batch, recipients, subject: values.subject, bodyText: values.body, termId: term ? term.id : null,
+  const before = await batchStatuses(env, batch);
+  const continuing = form.get('step') === 'continue';
+  // Families who already had it when this round of sending began.
+  const alreadyHad = continuing
+    ? (parseIntInRange(form.get('already') || '0', 0, 100000) ?? 0)
+    : recipients.filter((r) => before.get(r.userId) === 'sent').length;
+  const due = recipients.filter((r) => (continuing ? !before.has(r.userId) : before.get(r.userId) !== 'sent'));
+  const step = due.slice(0, BULK_PER_REQUEST);
+  const { outcomes, failed } = await sendBulk(env, {
+    batchId: batch, recipients: step, subject: values.subject, bodyText: values.body, termId: term ? term.id : null,
   });
+  const after = await batchStatuses(env, batch);
+  const untried = recipients.filter((r) => !after.has(r.userId)).length;
+  const sentTotal = recipients.filter((r) => after.get(r.userId) === 'sent').length;
+  const failedTotal = recipients.filter((r) => after.get(r.userId) === 'failed').length;
+  const sent = Math.max(0, sentTotal - alreadyHad);
   logEvent('bulk_email_sent', {
-    batch: batch.slice(0, 8), audience: values.audience, recipients: recipients.length, sent, skipped, failed,
+    batch: batch.slice(0, 8), audience: values.audience, recipients: recipients.length, step: step.length,
+    sent: outcomes.filter((o) => o.result.sent).length, failed, untried,
   });
 
-  const outcomeLabel = (o) => (o.result.sent ? 'Sent' : o.result.skipped ? 'Already sent' : "Couldn't send");
+  const stepByUser = new Map(outcomes.map((o) => [o.userId, o.result]));
+  const outcomeOf = (r) => {
+    const status = after.get(r.userId);
+    // Mid-way through a round of sending, an earlier step's send is "Sent".
+    if (status === 'sent') {
+      return continuing || stepByUser.get(r.userId)?.sent || before.get(r.userId) !== 'sent' ? ['sent', 'Sent'] : ['skipped', 'Already sent'];
+    }
+    if (status === 'failed') return ['failed', "Couldn't send"];
+    if (status === 'pending') return ['skipped', 'Sending…'];
+    return ['skipped', 'Not sent yet'];
+  };
   const logLink = `/admin/email/log?template=bulk${term ? `&term=${term.id}` : ''}`;
   const body = html`
     <div class="ops-page">
-      <h1>${failed ? 'Email partly sent' : 'Email sent'}</h1>
-      <p class="form-notice" role="status">Sent to ${sent} ${sent === 1 ? 'family' : 'families'}.${skipped
-        ? ` ${skipped} already had this email, so they weren't sent it again.` : ''}</p>
-      ${failed ? html`
-        <p class="form-error" role="alert">${failed} email${failed === 1 ? '' : 's'} couldn't be sent. Press the button
-          to try those again — nobody gets the email twice.</p>
-        <form method="post" action="/admin/email/send" class="email-send">
+      <h1>${untried ? 'Sending…' : failedTotal ? 'Email partly sent' : 'Email sent'}</h1>
+      ${untried ? html`
+        <p class="form-notice" role="status">Sent to ${sent} of ${recipients.length - alreadyHad} so far — ${untried} still to go.</p>
+        <form method="post" action="/admin/email/send" class="email-send" data-auto-continue>
           ${csrfField(user.csrfToken)}
           ${hiddenMessage(values)}
           <input type="hidden" name="batch" value="${batch}">
-          <button type="submit">Try again</button>
+          <input type="hidden" name="step" value="continue">
+          <input type="hidden" name="already" value="${alreadyHad}">
+          <p class="form-hint" data-auto-continue-note>Emails go out ${BULK_PER_REQUEST} at a time. Press Continue if this page doesn't carry on by itself.</p>
+          <button type="submit">Continue (${untried} left)</button>
         </form>
-      ` : ''}
-      <ul class="email-results">${joinHtml(outcomes.map((o) => html`
-        <li><span class="email-results__status email-results__status--${o.result.sent ? 'sent' : o.result.skipped ? 'skipped' : 'failed'}">${outcomeLabel(o)}</span>
-          ${o.parentName || 'No name on file'} — ${o.email}</li>`))}</ul>
+      ` : html`
+        <p class="form-notice" role="status">Sent to ${sent} ${sent === 1 ? 'family' : 'families'}.${alreadyHad
+          ? ` ${alreadyHad} already had this email, so they weren't sent it again.` : ''}</p>
+        ${failedTotal ? html`
+          <p class="form-error" role="alert">${failedTotal} email${failedTotal === 1 ? '' : 's'} couldn't be sent. Press the button
+            to try those again — nobody gets the email twice.</p>
+          <form method="post" action="/admin/email/send" class="email-send">
+            ${csrfField(user.csrfToken)}
+            ${hiddenMessage(values)}
+            <input type="hidden" name="batch" value="${batch}">
+            <button type="submit">Try again</button>
+          </form>
+        ` : ''}`}
+      <ul class="email-results">${joinHtml(recipients.map((r) => {
+    const [tone, label] = outcomeOf(r);
+    return html`
+        <li><span class="email-results__status email-results__status--${tone}">${label}</span>
+          ${r.parentName || 'No name on file'} — ${r.email}</li>`;
+  }))}</ul>
       <p class="table-actions"><a href="${logLink}">See it in the email log</a> <a href="/admin/email">Write another email</a></p>
     </div>
   `;
-  return pageResponse('Email sent', body, { user, admin: true });
+  return pageResponse(untried ? 'Sending email' : 'Email sent', body, { user, admin: true, extraHead: untried ? AUTO_CONTINUE_HEAD : '' });
 }
 
 // GET /admin/email/log[?template=…&term=…&q=…&status=…&page=…]
