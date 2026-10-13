@@ -735,6 +735,27 @@ button:active {
   margin: var(--space-2xs) var(--space-xs) var(--space-2xs) 0;
 }
 
+/* styles.css pads every <section> like a marketing band; account sections
+   are plain blocks. */
+.parent-flow .account-section {
+  padding-block: 0;
+}
+
+.parent-flow .plan-options {
+  border: 1px solid var(--colour-line);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+}
+
+.parent-flow .plan-options legend {
+  padding: 0 var(--space-2xs);
+}
+
+.sessions-heading {
+  font-weight: 400;
+  margin: var(--space-xs) 0 0;
+}
+
 /* Alerts and notes */
 
 .pf-alert {
@@ -955,6 +976,42 @@ button:active {
 
 .waitlist-entry p {
   margin: var(--space-2xs) 0;
+}
+
+/* Small phones: less side padding, and each class date stacks its time,
+   price and places beside the checkbox instead of overflowing the card. */
+@media (max-width: 560px) {
+  .parent-flow .class-card,
+  .parent-flow .confirm-panel,
+  .parent-flow .checkout-summary {
+    padding: var(--space-sm);
+  }
+
+  .parent-flow .session-option label {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: var(--space-xs);
+    align-items: start;
+  }
+
+  .parent-flow .session-option input {
+    grid-row: 1 / span 3;
+    margin-top: 0.35rem;
+  }
+
+  .parent-flow .session-when,
+  .parent-flow .session-meta,
+  .parent-flow .session-spots,
+  .parent-flow .session-full {
+    grid-column: 2;
+    min-width: 0;
+    margin-left: 0;
+  }
+
+  .parent-flow .term-book .button-link,
+  .parent-flow .booking-form > button {
+    width: 100%;
+  }
 }
 
 @media (min-width: 720px) {

@@ -110,6 +110,22 @@ function sessionLine(s) {
   return html`${formatSydney(s.starts_at)} · ${s.duration_mins} min`;
 }
 
+// A booking's classes, one line per date. When they are all the same class
+// its name (and venue) is said once, above the dates — `heading: false` when
+// the page already shows it.
+export function sessionsList(sessions, { heading = true } = {}) {
+  if (!sessions.length) return '';
+  const classes = new Set(sessions.map((s) => s.class_name));
+  const venues = [...new Set(sessions.map((s) => s.venue).filter(Boolean))];
+  const single = classes.size === 1;
+  const items = sessions.map((s) => html`
+    <li class="checkout-session"><span>${single ? '' : html`${s.class_name} — `}${sessionLine(s)}</span></li>`);
+  return html`
+    ${single && heading ? html`<p class="sessions-heading">${sessions[0].class_name}${venues.length === 1 ? html` · ${venues[0]}` : ''}</p>` : ''}
+    <ul class="checkout-sessions">${joinHtml(items)}</ul>
+  `;
+}
+
 // What a booking is, in a few words: "Term — Term 1 2027".
 export function bookingTitle(kind, termName) {
   return `${KIND_LABELS[kind] || 'Booking'}${termName ? ` — ${termName}` : ''}`;
@@ -644,7 +660,6 @@ export async function handleCheckout(req, env) {
   const { quote, term, sessions } = prepared;
 
   const title = bookingTitle(quote.kind, term ? term.name : null);
-  const sessionItems = sessions.map((s) => html`<li class="checkout-session"><span>${s.class_name} — ${sessionLine(s)}</span></li>`);
   const voucherMessage = quote.voucherError ? VOUCHER_ERRORS[quote.voucherError] || 'That voucher cannot be used.' : '';
 
   const body = html`
@@ -656,7 +671,7 @@ export async function handleCheckout(req, env) {
       ${prepared.warnings.includes('child_already_holds_some_weeks')
         ? html`<p class="form-notice" role="status">${child.name} already has a place in some of these weeks — those are left out and the price follows.</p>`
         : ''}
-      <ul class="checkout-sessions">${joinHtml(sessionItems)}</ul>
+      ${sessionsList(sessions, { heading: !term })}
       ${priceBreakdown(quote)}
       ${quote.isProRata ? html`<p class="muted">The term has already started, so the price covers the ${plural(quote.weeks, 'week')} that are left.</p>` : ''}
       ${quote.creditCents ? html`<p class="muted">Your account credit is used automatically — nothing to enter.</p>` : ''}
@@ -1026,10 +1041,7 @@ export async function handleConfirmPage(req, env, _params, ctx) {
   const now = nowIso();
   const status = effectiveStatus(booking, now);
   const flag = booking.needs_attention;
-  const sessionItems = booking.sessions.filter((s) => s.status === 'booked').map((s) => html`
-    <li>${s.class_name} — ${sessionLine(s)} <span class="session-venue">(${s.venue})</span></li>
-  `);
-  const sessionsList = sessionItems.length ? html`<ul class="confirm-sessions">${joinHtml(sessionItems)}</ul>` : '';
+  const classes = sessionsList(booking.sessions.filter((s) => s.status === 'booked'));
   const title = bookingTitle(booking.kind, booking.term_name);
   const received = html`
     <p>If you have any questions in the meantime, email <a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a>.</p>
@@ -1055,7 +1067,7 @@ export async function handleConfirmPage(req, env, _params, ctx) {
         ${track ? html`data-pixel-purchase data-booking-id="${booking.id}" data-amount="${(booking.amount_cents / 100).toFixed(2)}" data-currency="AUD"` : ''}>
         <h1>You're booked in! 🎉</h1>
         <p class="lede">${title} for ${booking.child_name} — we can't wait to see you.</p>
-        ${sessionsList}
+        ${classes}
         ${paymentSummary(booking, { instalmentsPaid, user })}
         ${booking.kind === 'trial' ? html`<p>After the class we'll email you an offer to join the rest of the term.</p>` : ''}
         <p>A confirmation email is on its way. You can see all your bookings in <a href="/account">your account</a>.</p>
@@ -1067,7 +1079,7 @@ export async function handleConfirmPage(req, env, _params, ctx) {
         <h1>Your place is held</h1>
         <p class="lede">${title} for ${booking.child_name} is held for you until ${formatSydney(booking.expires_at)}.
           Pay before then to keep it.</p>
-        ${sessionsList}
+        ${classes}
         <p><a class="button-link" href="/account/bookings/${booking.id}/pay">Pay now — ${formatAud(booking.amount_cents)}</a></p>
       </div>
     `;
@@ -1079,7 +1091,7 @@ export async function handleConfirmPage(req, env, _params, ctx) {
       <div class="confirm-panel confirm-pending" data-poll-booking="${booking.id}">
         <h1>Confirming your payment…</h1>
         <p class="lede">We're waiting for the payment confirmation — this page will update automatically. You don't need to do anything.</p>
-        ${sessionsList}
+        ${classes}
         <p class="muted">Closed the payment page without paying? You can pick up where you left off from <a href="/account">your account</a>.</p>
       </div>
       <script src="/js/booking-status.js" defer></script>

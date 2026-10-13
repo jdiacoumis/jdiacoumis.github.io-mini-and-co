@@ -29,7 +29,7 @@ import {
 } from '../lib/parent-flow.js';
 import {
   bookingTitle, paymentDescription, planChoice, consentFields, readConsent, createHostedCheckout,
-  closeProviderCheckout, confirmWithoutPayment, updateCardForm, CONTACT_EMAIL,
+  closeProviderCheckout, confirmWithoutPayment, updateCardForm, sessionsList, CONTACT_EMAIL,
 } from './booking.js';
 
 const STATUS_LABELS = {
@@ -305,16 +305,12 @@ export async function handlePayNow(req, env, params) {
   const term = booking.term_id ? await loadTerm(env, booking.term_id) : null;
   const planOption = payNowPlanOption(booking, term, now);
   const outstanding = Math.max(0, booking.amount_cents - booking.paid_cents);
-  const sessionItems = booking.sessions.filter((s) => s.status === 'booked').map((s) => html`
-    <li class="checkout-session"><span>${s.class_name} — ${formatSydney(s.starts_at)} · ${s.duration_mins} min</span></li>
-  `);
 
   const body = html`
     <h1>Pay for ${child.name}'s place</h1>
     <section class="checkout-summary">
       <h2>${bookingTitle(booking.kind, booking.term_name)} for ${child.name}</h2>
-      ${booking.class_name ? html`<p class="class-meta">${booking.class_name}</p>` : ''}
-      <ul class="checkout-sessions">${joinHtml(sessionItems)}</ul>
+      ${sessionsList(booking.sessions.filter((s) => s.status === 'booked'))}
       ${heldBreakdown(booking)}
       <p class="form-notice" role="status">This place is held for ${child.name} until ${formatSydney(booking.expires_at)}.</p>
     </section>
