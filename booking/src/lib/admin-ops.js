@@ -22,7 +22,7 @@
 // UTC ISO strings with second precision; dates are YYYY-MM-DD (Sydney).
 
 import { uuid, nowIso, isoFromMs, isoPlusSeconds, txnGuard, isConstraintError } from './db.js';
-import { html } from './html.js';
+import { html, joinHtml, csrfField } from './html.js';
 import { logEvent } from './log.js';
 import { sydneyToUtc, sydneyFields, formatSydney } from './time.js';
 import {
@@ -30,7 +30,9 @@ import {
   createPendingBooking, confirmBooking, formatAud, CHECKOUT_HOLD_MAX_SECS, KIND_LABELS,
   NEEDS_ATTENTION_LABELS, isCheckoutHold, flagStatement,
 } from './domain.js';
-import { issueCreditStatement, creditBalance } from './ledger.js';
+import {
+  issueCreditStatement, creditBalance, ledgerTotals, paymentInsertStatement, recomputeStatement,
+} from './ledger.js';
 import { planExpectedCents, proRata } from './pricing.js';
 
 const DAY_MS = 86400 * 1000;
@@ -304,7 +306,7 @@ const LEDGER_COLUMNS = `COALESCE(lt.received_cents, 0) AS received_cents,
 export const BOOKING_LIST_COLUMNS = `b.id, b.user_id, b.child_id, b.kind, b.term_id, b.status,
   b.list_amount_cents, b.discount_cents, b.voucher_code, b.credit_cents, b.amount_cents, b.paid_cents,
   b.payment_method, b.payment_status, b.payment_provider, b.payment_ref, b.stripe_subscription_id,
-  b.plan_instalments, b.plan_instalment_cents, b.plan_interval, b.plan_next_charge_at, b.paid_at,
+  b.plan_instalments, b.plan_instalment_cents, b.plan_interval, b.plan_next_charge_at, b.plan_ended_at, b.paid_at,
   b.needs_attention, b.created_at, b.expires_at, b.cancelled_at, b.cancel_reason,
   u.name AS parent_name, u.email AS parent_email, u.phone AS parent_phone, ch.name AS child_name,
   t.name AS term_name, tc.name AS class_name, ${LEDGER_COLUMNS},
@@ -915,28 +917,77 @@ export async function saveBookingNotes(env, bookingId, notes) {
 
 // Clear the booking's flag — only while it is one of `flags` — and append a
 // note line, in one batch: the note is written only when the flag clears
-// (both statements test the same flag, and a batch is atomic).
-async function clearFlagWithNote(env, bookingId, flags, line) {
+// (both statements test the same flag, and a batch is atomic). `extra`
+// statements ride in the same batch, behind a guard that rolls everything
+// back unless the flag is still one of `flags`.
+async function clearFlagWithNote(env, bookingId, flags, line, extra = []) {
   const current = [...new Set(flags)];
-  const results = await env.DB.batch([
-    env.DB.prepare(
-      `UPDATE bookings SET ${appendNoteSql('admin_notes')}
-       WHERE id = ?1 AND needs_attention IN (${current.map((_, i) => `?${i + 3}`).join(', ')})`,
-    ).bind(bookingId, String(line).slice(0, 600), ...current),
-    flagStatement(env, bookingId, null, { onlyIf: current }),
-  ]);
-  return results[1].meta.changes > 0;
+  const guard = extra.length
+    ? txnGuard(env, `(SELECT needs_attention FROM bookings WHERE id = ?1) IN (${current.map((_, i) => `?${i + 2}`).join(', ')})`,
+      [bookingId, ...current], 'flag')
+    : [];
+  let results;
+  try {
+    results = await env.DB.batch([
+      ...guard,
+      env.DB.prepare(
+        `UPDATE bookings SET ${appendNoteSql('admin_notes')}
+         WHERE id = ?1 AND needs_attention IN (${current.map((_, i) => `?${i + 3}`).join(', ')})`,
+      ).bind(bookingId, String(line).slice(0, 600), ...current),
+      flagStatement(env, bookingId, null, { onlyIf: current }),
+      ...extra,
+    ]);
+  } catch (err) {
+    if (extra.length && isConstraintError(err)) return false; // the flag changed meanwhile
+    throw err;
+  }
+  return results[guard.length + 1].meta.changes > 0;
 }
 
+// What "Mark as sorted" does to the money of an instalment plan that ended
+// before it was paid (review finding 5) — the payment status otherwise stays
+// "overdue" for good:
+//   owed       the rest is still owed, paid another way: the booking stops
+//              being a plan (payment_method 'offline'), so it reads "Part
+//              paid — owes $…" and Record offline payment settles it;
+//   write_off  the rest is written off: an adjustment for the shortfall
+//              makes the plan complete.
+export const PLAN_OUTCOMES = ['owed', 'write_off'];
+
 // "Resolve" on Needs attention (D6): clear the flag and keep the owner's
-// note on the booking.
-export async function resolveAttention(env, bookingId, { note = '', by = null, now = nowIso() } = {}) {
-  const booking = await env.DB.prepare(`SELECT needs_attention FROM bookings WHERE id = ?1`).bind(bookingId).first();
+// note on the booking. `planOutcome` (plan_ended_short only): see above.
+export async function resolveAttention(env, bookingId, { note = '', by = null, now = nowIso(), planOutcome = null } = {}) {
+  const booking = await env.DB.prepare(
+    `SELECT needs_attention, amount_cents, credit_cents, payment_method FROM bookings WHERE id = ?1`,
+  ).bind(bookingId).first();
   if (!booking || !booking.needs_attention) return false;
   const label = NEEDS_ATTENTION_LABELS[booking.needs_attention] || booking.needs_attention;
-  const line = `${formatSydney(now, 'date')}: resolved "${label}"${note ? ` — ${note}` : ''}`;
-  const changed = await clearFlagWithNote(env, bookingId, [booking.needs_attention], line);
-  if (changed) logEvent('attention_resolved', { booking_id: bookingId.slice(0, 8), by: by ? String(by).slice(0, 8) : null });
+  const extra = [];
+  let outcomeText = '';
+  if (booking.needs_attention === 'plan_ended_short' && PLAN_OUTCOMES.includes(planOutcome)) {
+    if (planOutcome === 'owed') {
+      extra.push(env.DB.prepare(`UPDATE bookings SET payment_method = 'offline' WHERE id = ?1 AND payment_method = 'plan'`).bind(bookingId));
+      outcomeText = ' — the rest is still owed, to be paid another way';
+    } else {
+      const totals = await ledgerTotals(env, bookingId);
+      const shortfall = booking.amount_cents + booking.credit_cents - totals.received_cents;
+      if (shortfall > 0) {
+        extra.push(paymentInsertStatement(env, {
+          bookingId, kind: 'adjustment', amountCents: shortfall, providerRef: `writeoff:${uuid()}`, method: 'adjustment',
+          note: 'Written off — the instalment plan ended before it was paid', recordedBy: by, now,
+        }));
+      }
+      outcomeText = ` — ${formatAud(Math.max(0, shortfall))} written off`;
+    }
+    extra.push(recomputeStatement(env, bookingId));
+  }
+  const line = `${formatSydney(now, 'date')}: resolved "${label}"${outcomeText}${note ? ` — ${note}` : ''}`;
+  const changed = await clearFlagWithNote(env, bookingId, [booking.needs_attention], line, extra);
+  if (changed) {
+    logEvent('attention_resolved', {
+      booking_id: bookingId.slice(0, 8), by: by ? String(by).slice(0, 8) : null, plan_outcome: extra.length ? planOutcome : null,
+    });
+  }
   return changed;
 }
 
@@ -1275,16 +1326,17 @@ export async function voucherInUse(env, code) {
 
 // Post-redirect-get notices: only allow-listed keys are ever shown, so nothing
 // from the query string is reflected into the page.
-// `also` adds a second allow-listed notice (e.g. "refunds added" after a
-// Check with Stripe).
+// `also` (repeatable) adds further allow-listed notices (e.g. "refunds
+// added" after a Check with Stripe).
 export function noticeFor(req, notices = {}, errors = {}) {
   const params = new URL(req.url).searchParams;
   const pick = (map, key) => (key && Object.hasOwn(map, key) ? map[key] : null);
   const ok = pick(notices, params.get('ok'));
-  const also = params.get('also') !== params.get('ok') ? pick(notices, params.get('also')) : null;
+  const also = [...new Set(params.getAll('also'))].slice(0, 4)
+    .filter((key) => key !== params.get('ok')).map((key) => pick(notices, key)).filter(Boolean);
   const err = pick(errors, params.get('err'));
   return html`${ok ? html`<p class="form-notice" role="status">${ok}</p>` : ''}${
-    also ? html`<p class="form-notice" role="status">${also}</p>` : ''}${
+    joinHtml(also.map((text) => html`<p class="form-notice" role="status">${text}</p>`))}${
     err ? html`<p class="form-error" role="alert">${err}</p>` : ''}`;
 }
 
@@ -1307,6 +1359,26 @@ export function describeBooking(booking) {
   if (!sessions.length) return what;
   if (sessions.length === 1) return `${what} (${formatSydney(sessions[0].starts_at)})`;
   return `${what} (${sessions.length} weeks from ${formatSydney(sessions[0].starts_at, 'date')})`;
+}
+
+// The "Mark as sorted" form (booking page and Needs attention). A plan that
+// ended before it was paid asks what happens to the rest (resolveAttention,
+// PLAN_OUTCOMES).
+export function resolveForm(b, csrfToken, { back = null, owing = 0 } = {}) {
+  const endedShort = b.needs_attention === 'plan_ended_short';
+  return html`
+    <form method="post" action="/admin/bookings/${b.id}/resolve" class="inline-form resolve-form">
+      ${csrfField(csrfToken)}
+      ${back ? html`<input type="hidden" name="back" value="${back}">` : ''}
+      ${endedShort ? html`
+        <fieldset class="check-list">
+          <legend>The money still owed${owing ? ` (${formatAud(owing)})` : ''}:</legend>
+          <label><input type="radio" name="plan_outcome" value="owed" required> They'll pay it another way — keep it owing</label>
+          <label><input type="radio" name="plan_outcome" value="write_off"> Write it off</label>
+        </fieldset>` : ''}
+      <label>What did you do? <input type="text" name="note" maxlength="300" required></label>
+      <button type="submit" class="button-small">${back ? 'Save and clear the flag' : 'Mark as sorted'}</button>
+    </form>`;
 }
 
 // A dollar field that may be left blank: { ok, cents } (cents null when blank).

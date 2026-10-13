@@ -3,7 +3,7 @@
 // the drivers' listInvoices() — Stripe over REST (fetch stubbed) and the
 // mock (the dev_mock_invoices outbox the dev checkout writes).
 
-import { test, after, afterEach } from 'node:test';
+import { test, after, afterEach, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTestDb, seedFamilyAndTerm } from './helpers.js';
 import { getPaymentsDriver, checkoutParams } from '../../src/lib/payments-driver.js';
@@ -19,6 +19,10 @@ const stripeEnv = { ...devEnv, PAYMENTS_DRIVER: 'stripe', STRIPE_SECRET_KEY: 'sk
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
+// Nothing leaves the machine: until a test says otherwise, Stripe knows
+// nothing (404) — e.g. the payment intent and plan-end lookups invoice.paid
+// makes while a fixture is set up.
+beforeEach(() => { stubStripe([]); });
 
 function stubStripe(routes) {
   const calls = [];
@@ -104,7 +108,7 @@ test('Check with Stripe adds the instalments whose webhooks were lost — once',
   ];
   stubStripe([
     { method: 'GET', path: '/v1/invoices', body: () => ({ object: 'list', data: listed }) },
-    { method: 'GET', path: `/v1/subscriptions/${plan.sub}`, body: () => ({ id: plan.sub, status: 'active', customer: 'cus_123' }) },
+    { method: 'GET', path: `/v1/subscriptions/${plan.sub}`, body: () => ({ id: plan.sub, status: 'active', customer: 'cus_123', cancel_at: 1803628800 }) },
   ]);
   const booking = await devEnv.DB.prepare(`SELECT * FROM bookings WHERE id = ?1`).bind(plan.id).first();
   const result = await checkWithStripe(stripeEnv, booking);

@@ -23,8 +23,10 @@
 import { getPaymentsDriver, idOf, paymentIntentFromInvoicePayments } from '../lib/payments-driver.js';
 import { confirmBooking, abandonCheckout, flagStatement } from '../lib/domain.js';
 import { paymentInsertStatement, recomputeStatement, recomputeBooking, ledgerTotals } from '../lib/ledger.js';
-import { planCancelAt, planExpectedCents, INTERVAL_DAYS } from '../lib/pricing.js';
 import { notifyBookingConfirmed, notifyAttention, notifyPlanFailed } from '../lib/notify.js';
+import {
+  updatePlanProgress, ensurePlanEnd, settlePlanIfPaid, flagIfOverpaid, markPlanEnded,
+} from '../lib/plans.js';
 import { nowIso, isoFromMs } from '../lib/db.js';
 import { isValidId } from '../lib/validate.js';
 import { logEvent, logError } from '../lib/log.js';
@@ -194,23 +196,6 @@ async function bookingForCharge(env, charge, driver) {
   return null;
 }
 
-// The plan a subscription was created for (checkoutParams puts it in the
-// subscription's metadata), written back onto a booking that lost its copy.
-// Returns { plan_instalments, plan_interval } or null.
-async function restorePlanFromSubscription(env, bookingId, sub) {
-  const meta = sub?.metadata || {};
-  const n = Number(meta.plan_instalments);
-  const each = Number(meta.plan_instalment_cents);
-  const interval = meta.plan_interval;
-  if (!Number.isInteger(n) || n < 2 || n > 20 || !['week', 'fortnight'].includes(interval)
-    || !Number.isInteger(each) || each <= 0 || each > 1000000) return null;
-  await env.DB.prepare(
-    `UPDATE bookings SET payment_method = 'plan', plan_instalments = ?2, plan_interval = ?3, plan_instalment_cents = ?4
-     WHERE id = ?1 AND (plan_instalments IS NULL OR plan_instalments < 2)`,
-  ).bind(bookingId, n, interval, each).run();
-  logEvent('plan_restored_from_subscription', { booking_id: bookingId.slice(0, 8) });
-  return { plan_instalments: n, plan_interval: interval };
-}
 
 // After a confirmation attempt: email the family once, alert the owner when
 // money landed somewhere it should not have.
@@ -223,12 +208,17 @@ async function afterConfirm(env, bookingId, result) {
 }
 
 // A one-off payment that differs from what the booking owes (amount mismatch
-// or a second payment) is flagged for the owner.
+// or a second payment) is flagged for the owner; on a plan (whose total
+// arrives in parts) only money beyond the total is — as 'overpaid'.
 async function checkPaidInFull(env, bookingId) {
   const booking = await env.DB.prepare(
     `SELECT amount_cents, credit_cents, payment_method, status FROM bookings WHERE id = ?1`,
   ).bind(bookingId).first();
-  if (!booking || booking.status !== 'confirmed' || booking.payment_method === 'plan') return;
+  if (!booking || booking.status !== 'confirmed') return;
+  if (booking.payment_method === 'plan') {
+    await flagIfOverpaid(env, bookingId);
+    return;
+  }
   const totals = await ledgerTotals(env, bookingId);
   if (totals.received_cents !== booking.amount_cents + booking.credit_cents) {
     await flagStatement(env, bookingId, 'webhook_mismatch', { overwrite: false }).run();
@@ -252,30 +242,11 @@ async function onCheckoutCompleted(env, session) {
   if (session.mode === 'subscription') {
     const subscriptionId = idOf(session.subscription);
     if (!subscriptionId) throw new Error('Subscription checkout completed without a subscription id');
-    let plan = await env.DB.prepare(
-      `SELECT plan_instalments, plan_interval FROM bookings WHERE id = ?1`,
-    ).bind(bookingId).first();
-    const sub = await driver.retrieveSubscription(subscriptionId);
-    if (plan && !(plan.plan_instalments >= 2)) {
-      // The booking forgot its plan (an earlier checkout was abandoned): a
-      // subscription that completes anyway is still a plan — restore it from
-      // the subscription's metadata, or it would never be given an end.
-      const restored = await restorePlanFromSubscription(env, bookingId, sub);
-      if (restored) plan = restored;
-    }
-    if (plan && plan.plan_instalments >= 2) {
-      // Exactly n invoices: cancel at the end of the n-th billing period.
-      const anchor = sub.billingCycleAnchor || sub.startDate || Math.floor(Date.now() / 1000);
-      const cancelAt = planCancelAt(anchor, plan.plan_instalments, plan.plan_interval || 'week');
-      if (sub.cancelAt !== cancelAt) await driver.setSubscriptionCancelAt(subscriptionId, cancelAt);
-    } else {
-      // No plan anywhere: never leave a subscription running unnoticed.
-      logEvent('subscription_without_plan', { booking_id: bookingId.slice(0, 8) });
-      await flagStatement(env, bookingId, 'webhook_mismatch', { overwrite: false }).run();
-      await safely('attention_email_failed', notifyAttention(env, bookingId, 'webhook_mismatch', {
-        detail: 'Stripe started an instalment plan for this booking without the plan details — check the subscription in Stripe and set its end date.',
-      }));
-    }
+    // Exactly n invoices: cancel at the end of the n-th billing period. A
+    // Stripe failure here fails the event, so Stripe retries it — a plan is
+    // never left without its end. (invoice.paid and Check with Stripe set
+    // it too when this event never arrives — review finding 3.)
+    await ensurePlanEnd(env, { bookingId, subscriptionId, onlyIfMissing: false });
     // The ledger row arrives with the first invoice's invoice.paid.
     const result = await confirmBooking(env, bookingId, { provider: driver.name, paymentRef: session.id, subscriptionId });
     await afterConfirm(env, bookingId, result);
@@ -306,35 +277,6 @@ async function onCheckoutExpired(env, session) {
   logEvent('webhook_checkout_expired', { booking_id: bookingId.slice(0, 8), outcome });
 }
 
-// Plan bookkeeping after an instalment: next charge date, and clear "overdue"
-// once the money collected has caught up with the schedule.
-async function updatePlanProgress(env, bookingId, now = nowIso()) {
-  const b = await env.DB.prepare(
-    `SELECT amount_cents, plan_instalments, plan_instalment_cents, plan_interval, paid_at, payment_status
-     FROM bookings WHERE id = ?1 AND payment_method = 'plan'`,
-  ).bind(bookingId).first();
-  if (!b || !b.plan_instalments) return;
-  const totals = await ledgerTotals(env, bookingId);
-  const days = INTERVAL_DAYS[b.plan_interval] || 7;
-  const paid = totals.instalments_paid;
-  const next = paid < b.plan_instalments && b.paid_at
-    ? isoFromMs(Date.parse(b.paid_at) + paid * days * 86400 * 1000)
-    : null;
-  const expected = planExpectedCents({
-    totalCents: b.amount_cents, n: b.plan_instalments, eachCents: b.plan_instalment_cents,
-    interval: b.plan_interval, anchorIso: b.paid_at, now,
-  });
-  const caughtUp = totals.money_in_cents >= expected ? 1 : 0;
-  await env.DB.batch([
-    env.DB.prepare(
-      `UPDATE bookings SET plan_next_charge_at = ?2,
-         payment_status = CASE WHEN payment_status = 'plan_overdue' AND ?3 = 1 THEN 'plan_active' ELSE payment_status END,
-         needs_attention = CASE WHEN needs_attention = 'plan_overdue' AND ?3 = 1 THEN NULL ELSE needs_attention END
-       WHERE id = ?1`,
-    ).bind(bookingId, next, caughtUp),
-    recomputeStatement(env, bookingId),
-  ]);
-}
 
 async function onInvoicePaid(env, invoice) {
   const { bookingId, subscriptionId } = await bookingForInvoice(env, invoice);
@@ -372,7 +314,18 @@ async function onInvoicePaid(env, invoice) {
       .bind(invoice.id, paymentIntent).run();
   }
   await afterConfirm(env, bookingId, result);
-  if (result.ok) await updatePlanProgress(env, bookingId);
+  if (!result.ok) return;
+  await updatePlanProgress(env, bookingId);
+  // Everything owed is in (with whatever the owner recorded by hand): stop
+  // the subscription so nothing more is taken (finding 1). Otherwise make
+  // sure it has its end date — this event may be the first, or the only,
+  // one Stripe delivered for the plan (finding 3). Neither fails the event:
+  // the instalment is recorded, and Check with Stripe repeats both.
+  const settled = await safely('plan_settle_failed', settlePlanIfPaid(env, bookingId));
+  if (!settled && subscriptionId) {
+    await safely('plan_end_check_failed', ensurePlanEnd(env, { bookingId, subscriptionId, onlyIfMissing: true }));
+  }
+  await flagIfOverpaid(env, bookingId);
 }
 
 async function onInvoicePaymentFailed(env, invoice) {
@@ -409,12 +362,21 @@ async function onSubscriptionDeleted(env, subscription) {
     logEvent('webhook_subscription_unmatched', {});
     return;
   }
-  const booking = await env.DB.prepare(`SELECT status FROM bookings WHERE id = ?1`).bind(bookingId).first();
+  const booking = await env.DB.prepare(`SELECT status, plan_ended_at FROM bookings WHERE id = ?1`).bind(bookingId).first();
+  // Whatever the booking's state, this plan takes no more payments: no
+  // overdue reminders, no Stop plan (finding 5).
+  await markPlanEnded(env, bookingId);
   if (!booking || booking.status !== 'confirmed') {
     logEvent('webhook_subscription_ended_ignored', { booking_id: bookingId.slice(0, 8) });
     return;
   }
   const { payment_status: status } = await recomputeBooking(env, bookingId);
+  if (booking.plan_ended_at) {
+    // We stopped it ourselves (Stop plan, fully paid, booking cancelled):
+    // the owner already decided what is owed — nothing to flag.
+    logEvent('plan_end_confirmed', { booking_id: bookingId.slice(0, 8), status });
+    return;
+  }
   if (status === 'plan_complete') {
     await env.DB.prepare(`UPDATE bookings SET plan_next_charge_at = NULL WHERE id = ?1`).bind(bookingId).run();
     logEvent('plan_completed', { booking_id: bookingId.slice(0, 8) });

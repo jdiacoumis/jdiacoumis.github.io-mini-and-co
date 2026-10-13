@@ -1728,3 +1728,28 @@ button:active {
 }
 
 /* === 2C waitlist admin, email, ops — end === */
+
+/* === Phase 3 review fixes — start === */
+
+/* A warning beside a money action (e.g. recording a payment while Stripe
+   is still taking instalments). */
+.form-warning {
+  background-color: var(--colour-bg-warm);
+  border: 1px solid var(--colour-accent-blush);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+  color: var(--colour-text);
+  max-width: var(--max-width-prose);
+}
+
+.resolve-form fieldset {
+  border: none;
+  padding: 0;
+  margin: 0 0 var(--space-2xs);
+}
+
+.resolve-form fieldset label {
+  display: block;
+}
+
+/* === Phase 3 review fixes — end === */

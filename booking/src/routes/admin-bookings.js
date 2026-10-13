@@ -26,22 +26,25 @@ import {
   effectiveStatus, formatAud, confirmBooking, cancelBooking, getBooking, KIND_LABELS, PAYMENT_STATUS_LABELS,
   NEEDS_ATTENTION_LABELS, BOOKING_KINDS, forgetPlanChoiceStatement,
 } from '../lib/domain.js';
-import { recordPayment } from '../lib/ledger.js';
+import { recordPayment, ledgerTotals, recomputeStatement } from '../lib/ledger.js';
 import { getPaymentsDriver } from '../lib/payments-driver.js';
 import { notifyBookingConfirmed } from '../lib/notify.js';
+import { updatePlanProgress, settlePlanIfPaid, flagIfOverpaid, stopPlan } from '../lib/plans.js';
 import { csvResponse } from '../lib/csv.js';
 import { logEvent, logError } from '../lib/log.js';
-import { CHECK_NOTICES, sendOfflineReceipt } from './admin-ops.js';
+import { CHECK_NOTICES, sendOfflineReceipt, checkWithStripe } from './admin-ops.js';
 import {
   listBookings, loadBookingRow, listLedger, listBookingRows, bookingWeeks, perWeekCreditCents, paymentSummary,
   owingCents, transferBookingSession, listTransferTargets, cancelBookingWeek, restoreBooking, wasConfirmed,
   saveBookingNotes, cancelEndedBooking, appendBookingNote, listCustomers, loadCustomer, createChild, creditState,
   noticeFor, errorBlock, centsToInput, optionalDollars, parseSignedDollarsToCents, isDateStr, addDays, shortDate,
+  clearFlagIf, resolveForm,
 } from '../lib/admin-ops.js';
 
 const BOOKING_STATUSES = ['pending', 'confirmed', 'cancelled', 'expired'];
 const PAYMENT_STATUSES = Object.keys(PAYMENT_STATUS_LABELS);
 const OFFLINE_METHODS = ['cash', 'bank transfer', 'card (in person)', 'other'];
+const REFUND_METHODS = ['bank transfer', 'cash', 'other'];
 
 const NOTICES = {
   'payment-recorded': 'Payment recorded and a receipt emailed.',
@@ -62,6 +65,10 @@ const NOTICES = {
   'created-comp': 'Complimentary booking created and confirmed. The family has been emailed.',
   'created-free': 'Booking created and confirmed — nothing to pay (account credit covered it).',
   'created-unconfirmed': 'Booking created, but it could not be confirmed — see Needs attention.',
+  'payment-recorded-plan-stopped': 'Payment recorded and a receipt emailed. That covers everything owed, so the instalment plan has been stopped — Stripe will take no more payments.',
+  'plan-stopped': 'Instalment plan stopped — Stripe will take no more payments for this booking. Anything still owed shows below; record it when the family pays another way.',
+  'refund-recorded': 'Refund recorded in the payments. (It doesn’t change whether the booking counts as paid.)',
+  'cancel-paid': 'The family had just finished paying, so the booking was not cancelled: it is confirmed and the payment recorded. Cancel it again if you still want to — the payment then needs refunding in Stripe.',
   ...CHECK_NOTICES,
 };
 const ERRORS = {
@@ -71,7 +78,27 @@ const ERRORS = {
   'week-not-booked': 'That week is no longer booked.',
   'booking-not-live': 'That booking has ended, so its weeks can’t be changed.',
   'adjustment-amount': 'Please enter an adjustment like 10, −10 or 12.50.',
+  'payment-plan-not-stopped': 'The payment covers everything owed, but Stripe could not be asked to stop the instalment plan. Press Stop plan below (or cancel the subscription in the Stripe dashboard) so no more instalments are taken.',
+  'plan-stop-failed': 'Stripe could not be reached to stop the instalment plan, so nothing changed. Try again in a minute, or cancel the subscription in the Stripe dashboard.',
+  'refund-amount': 'Please enter the refund as an amount like 28 (no more than has been paid), how it was paid back, and a reason.',
+  'cancel-checkout-open': 'The family’s payment page could not be closed just now — they may be paying this minute — so the booking was not cancelled. Please try again in a minute.',
+  'resolve-outcome': 'Please choose what happens to the money still owed on the instalment plan.',
 };
+
+// A plan whose Stripe subscription can still take payments.
+function planIsLive(b) {
+  return Boolean(b.stripe_subscription_id) && !b.plan_ended_at;
+}
+
+// After money is recorded on a booking (offline payment, adjustment): a
+// plan's progress (clears "overdue" once caught up); a plan now fully paid
+// stops its subscription (review finding 1); more than it costs is flagged.
+async function afterMoneyIn(env, bookingId) {
+  await updatePlanProgress(env, bookingId);
+  const settled = await settlePlanIfPaid(env, bookingId);
+  await flagIfOverpaid(env, bookingId);
+  return { stopped: Boolean(settled && settled.ok && !settled.already), stopFailed: Boolean(settled && !settled.ok) };
+}
 
 // --- Bookings list --------------------------------------------------------------
 
@@ -88,6 +115,11 @@ function recordPaymentForm(b, csrfToken, { open = false } = {}) {
       <summary>Record offline payment</summary>
       <form method="post" action="/admin/bookings/${b.id}/record-payment" class="inline-form record-payment-form">
         ${csrfField(csrfToken)}
+        ${b.payment_method === 'plan' && planIsLive(b) ? html`
+          <p class="form-warning" role="note"><strong>Instalments are still being taken by card for this booking.</strong>
+            If this payment covers everything still owed, the instalment plan is stopped automatically. If it covers
+            only part, Stripe keeps taking the instalments (and retrying a failed one) — press <a href="/admin/bookings/${b.id}/stop-plan">Stop plan</a>
+            first if the family is paying the rest another way.</p>` : ''}
         <input type="hidden" name="nonce" value="${uuid()}">
         <label>Amount (AUD) <input type="text" name="amount" value="${centsToInput(owingCents(b))}" required size="8" inputmode="decimal"></label>
         <label>Method <select name="method">${joinHtml(methods)}</select></label>
@@ -296,11 +328,7 @@ export async function handleAdminBooking(req, env, params) {
     ${b.needs_attention ? html`
       <div class="confirm-box">
         <p><span class="attention-flag">${NEEDS_ATTENTION_LABELS[b.needs_attention] || b.needs_attention}</span></p>
-        <form method="post" action="/admin/bookings/${b.id}/resolve" class="inline-form">
-          ${csrfField(user.csrfToken)}
-          <label>What did you do? <input type="text" name="note" maxlength="300" required></label>
-          <button type="submit" class="button-small">Mark as sorted</button>
-        </form>
+        ${resolveForm(b, user.csrfToken, { owing: payment.owingCents })}
       </div>` : ''}
     <dl class="detail-list">
       <dt>Parent</dt><dd><a href="/admin/customers/${b.user_id}">${b.parent_name || b.parent_email}</a> · ${b.parent_email}${b.parent_phone ? ` · ${b.parent_phone}` : ''}</dd>
@@ -309,7 +337,7 @@ export async function handleAdminBooking(req, env, params) {
       <dt>Status</dt><dd><span class="status status-${status}">${status}</span>${b.status === 'pending' && b.expires_at ? ` · held until ${formatSydney(b.expires_at)}` : ''}${b.cancelled_at ? ` · cancelled ${formatSydney(b.cancelled_at, 'date')}${b.cancel_reason ? ` (${b.cancel_reason})` : ''}` : ''}</dd>
       <dt>Price</dt><dd>${formatAud(b.list_amount_cents)}${b.discount_cents ? ` − voucher ${b.voucher_code || ''} ${formatAud(b.discount_cents)}` : ''}${b.credit_cents ? ` − account credit ${formatAud(b.credit_cents)}` : ''} = ${formatAud(b.amount_cents)} to pay</dd>
       <dt>Payment</dt><dd>${payment.label} · received ${formatAud(b.received_cents)}${b.refunded_cents ? ` · refunded ${formatAud(b.refunded_cents)}` : ''}${payment.owingCents ? ` · owes ${formatAud(payment.owingCents)}` : ''}</dd>
-      ${b.payment_method === 'plan' ? html`<dt>Instalments</dt><dd>${b.plan_instalments} × ${formatAud(b.plan_instalment_cents)} every ${b.plan_interval || 'week'} · ${b.instalments_paid} paid${b.plan_next_charge_at ? ` · next ${shortDate(b.plan_next_charge_at)}` : ''}</dd>` : ''}
+      ${b.payment_method === 'plan' || b.stripe_subscription_id ? html`<dt>Instalments</dt><dd>${b.plan_instalments ? `${b.plan_instalments} × ${formatAud(b.plan_instalment_cents)} every ${b.plan_interval || 'week'} · ` : ''}${b.instalments_paid} paid${b.plan_next_charge_at && !b.plan_ended_at ? ` · next ${shortDate(b.plan_next_charge_at)}` : ''}${b.plan_ended_at ? ` · plan ended ${shortDate(b.plan_ended_at)} (Stripe takes no more)` : b.stripe_subscription_id ? ' · Stripe is taking the instalments' : ''}</dd>` : ''}
       <dt>Booked</dt><dd>${formatSydney(b.created_at)}</dd>
     </dl>
     <div class="inline-actions">
@@ -319,6 +347,7 @@ export async function handleAdminBooking(req, env, params) {
           <button type="submit" class="button-small button-secondary">Check with Stripe</button>
         </form>` : ''}
       ${b.status !== 'cancelled' ? html`<a href="/admin/bookings/${b.id}/cancel" class="button-link button-small button-secondary">Cancel booking…</a>` : ''}
+      ${planIsLive(b) ? html`<a href="/admin/bookings/${b.id}/stop-plan" class="button-link button-small button-secondary">Stop plan…</a>` : ''}
       ${b.status === 'cancelled' && wasConfirmed(b) ? html`
         <form method="post" action="/admin/bookings/${b.id}/restore" class="inline-form">
           ${csrfField(user.csrfToken)}
@@ -353,6 +382,21 @@ export async function handleAdminBooking(req, env, params) {
         <button type="submit" class="button-small">Save adjustment</button>
       </form>
     </details>
+    ${b.money_in_cents - b.refunded_cents > 0 ? html`
+      <details class="inline-details">
+        <summary>Record a refund</summary>
+        <form method="post" action="/admin/bookings/${b.id}/record-refund" class="inline-form record-payment-form">
+          ${csrfField(user.csrfToken)}
+          <input type="hidden" name="nonce" value="${uuid()}">
+          <p class="form-hint">For money you gave back <strong>outside Stripe</strong> (cash or a bank transfer).
+            Refunds made in the Stripe dashboard appear here by themselves — or press Check with Stripe.
+            A refund doesn't change whether the booking counts as paid; cancel the booking or the weeks as well if they're leaving.</p>
+          <label>Amount (AUD) <input type="text" name="amount" required size="8" inputmode="decimal"></label>
+          <label>Paid back by <select name="method">${joinHtml(REFUND_METHODS.map((m) => html`<option value="${m}">${m}</option>`))}</select></label>
+          <label>Reason <input type="text" name="note" maxlength="200" required></label>
+          <button type="submit" class="button-small">Record refund</button>
+        </form>
+      </details>` : ''}
     ${creditRows.length ? html`<h2>Credits from this booking</h2><ul>${joinHtml(creditRows)}</ul>` : ''}
     <h2>Notes</h2>
     <form method="post" action="/admin/bookings/${b.id}/notes" class="booking-form">
@@ -404,9 +448,13 @@ export async function handleAdminRecordPayment(req, env, params) {
   };
 
   let ok;
+  let err = null;
   if (booking.status === 'confirmed') {
     await recordPayment(env, { ...payment, bookingId: booking.id });
     ok = 'payment-recorded';
+    const after = await afterMoneyIn(env, booking.id);
+    if (after.stopped) ok = 'payment-recorded-plan-stopped';
+    if (after.stopFailed) err = 'payment-plan-not-stopped';
   } else {
     // Pending: stop a live Stripe checkout so the family cannot pay twice.
     let checkoutClosed = !booking.payment_ref;
@@ -426,6 +474,7 @@ export async function handleAdminRecordPayment(req, env, params) {
     const result = await confirmBooking(env, booking.id, { provider: 'external', payment });
     if (result.ok) {
       ok = 'payment-confirmed';
+      await flagIfOverpaid(env, booking.id);
       if (result.newlyConfirmed) {
         try {
           await notifyBookingConfirmed(env, booking.id);
@@ -443,10 +492,10 @@ export async function handleAdminRecordPayment(req, env, params) {
   const full = await getBooking(env, booking.id);
   try {
     await sendOfflineReceipt(env, full, payment);
-  } catch (err) {
-    logError('offline_receipt_failed', err, { booking_id: booking.id.slice(0, 8) });
+  } catch (sendErr) {
+    logError('offline_receipt_failed', sendErr, { booking_id: booking.id.slice(0, 8) });
   }
-  return redirect(`/admin/bookings/${booking.id}?ok=${ok}`, 303);
+  return redirect(`/admin/bookings/${booking.id}?ok=${ok}${err ? `&err=${err}` : ''}`, 303);
 }
 
 // POST /admin/bookings/:id/adjustment — a signed ledger row with a reason.
@@ -464,7 +513,99 @@ export async function handleAdminAdjustment(req, env, params) {
     note: cleanText(form.get('note'), 200), recordedBy: user.userId,
   });
   logEvent('ledger_adjustment', { booking_id: booking.id.slice(0, 8), amount_cents: amountCents, by: user.userId.slice(0, 8) });
-  return redirect(`/admin/bookings/${booking.id}?ok=adjusted`, 303);
+  const after = await afterMoneyIn(env, booking.id);
+  return redirect(`/admin/bookings/${booking.id}?ok=adjusted${after.stopFailed ? '&err=payment-plan-not-stopped' : ''}`, 303);
+}
+
+// POST /admin/bookings/:id/record-refund — money given back outside Stripe
+// (cash, bank transfer): a negative 'refund' ledger row with the reason. It
+// lowers what was received net but never the payment status (received vs
+// owed ignores refunds — lib/ledger.js). Card refunds are made in Stripe and
+// recorded from its webhook (or Check with Stripe). At most what was paid.
+export async function handleAdminRecordRefund(req, env, params) {
+  const user = await requireAdmin(req, env);
+  const form = await parseForm(req);
+  requireCsrf(req, user, form);
+  const b = await loadBookingRow(env, params.id);
+  if (!b) throw notFound();
+  const amountCents = parseDollarsToCents(form.get('amount'), 1000000);
+  const nonce = String(form.get('nonce') || '');
+  const note = cleanText(form.get('note'), 200);
+  const refundable = (b.money_in_cents || 0) - (b.refunded_cents || 0);
+  if (!amountCents || amountCents > refundable || !note || !isValidId(nonce)) {
+    return redirect(`/admin/bookings/${b.id}?err=refund-amount#record-payment`, 303);
+  }
+  await recordPayment(env, {
+    bookingId: b.id, kind: 'refund', amountCents: -amountCents, providerRef: `refund:${nonce}`,
+    method: REFUND_METHODS.includes(form.get('method')) ? form.get('method') : 'other', note, recordedBy: user.userId,
+  });
+  logEvent('refund_recorded_by_admin', { booking_id: b.id.slice(0, 8), amount_cents: amountCents, by: user.userId.slice(0, 8) });
+  return redirect(`/admin/bookings/${b.id}?ok=refund-recorded`, 303);
+}
+
+// GET /admin/bookings/:id/stop-plan — confirm step for "Stop plan".
+export async function handleAdminStopPlanConfirm(req, env, params) {
+  const user = await requireAdmin(req, env);
+  const b = await loadBookingRow(env, params.id);
+  if (!b) throw notFound();
+  if (!planIsLive(b)) return redirect(`/admin/bookings/${b.id}`, 303);
+  const owing = owingCents(b);
+  const body = html`
+    <p class="breadcrumb"><a href="/admin/bookings/${b.id}">Back to the booking</a></p>
+    <h1>Stop ${b.child_name}'s instalment plan?</h1>
+    <div class="confirm-box">
+      <p>${KIND_LABELS[b.kind] || b.kind}${b.term_name ? ` · ${b.term_name}` : ''} · ${b.parent_name || b.parent_email}
+        · ${b.instalments_paid} instalment${b.instalments_paid === 1 ? '' : 's'} paid</p>
+      <ul>
+        <li>Stripe takes no more instalments for this booking, and stops retrying one that failed.</li>
+        ${b.status === 'confirmed' ? html`<li>The booking stays as it is — ${b.child_name} keeps their place.</li>` : ''}
+        ${b.status === 'confirmed' && owing > 0 ? html`<li>${formatAud(owing)} is still owed: it stays owing on the booking, so record it when the family pays another way.</li>` : ''}
+        <li>It can't be restarted: to pay by instalments again the family would book again.</li>
+      </ul>
+      <form method="post" action="/admin/bookings/${b.id}/stop-plan" class="booking-form">
+        ${csrfField(user.csrfToken)}
+        <div class="form-group">
+          <label for="reason">Reason <span class="muted">(only you see this)</span></label>
+          <input type="text" id="reason" name="reason" maxlength="200" placeholder="Paying the rest by bank transfer">
+        </div>
+        <button type="submit" class="button-danger">Yes, stop the plan</button>
+        <a href="/admin/bookings/${b.id}" class="button-link button-secondary">Keep it</a>
+      </form>
+    </div>
+  `;
+  return pageResponse('Stop plan', body, { user, admin: true });
+}
+
+// POST /admin/bookings/:id/stop-plan — "Stop plan" (review finding 11): any
+// booking with a live subscription, including cancelled and flagged ones. A
+// live booking still owing money stops being a plan: what is left is owed
+// by other means (Record offline payment settles it).
+export async function handleAdminStopPlan(req, env, params) {
+  const user = await requireAdmin(req, env);
+  const form = await parseForm(req);
+  requireCsrf(req, user, form);
+  const b = await env.DB.prepare(
+    `SELECT id, status, payment_method, amount_cents, credit_cents, stripe_subscription_id, plan_ended_at
+     FROM bookings WHERE id = ?1`,
+  ).bind(params.id).first();
+  if (!b) throw notFound();
+  if (!b.stripe_subscription_id) return redirect(`/admin/bookings/${b.id}`, 303);
+  const reason = cleanText(form.get('reason'), 200);
+  const result = await stopPlan(env, b.id, { by: user.userId, why: `stopped by the owner${reason ? ` (${reason})` : ''}` });
+  if (!result.ok) return redirect(`/admin/bookings/${b.id}?err=plan-stop-failed`, 303);
+  if (b.status === 'confirmed' && b.payment_method === 'plan') {
+    const totals = await ledgerTotals(env, b.id);
+    if (totals.received_cents < b.amount_cents + b.credit_cents) {
+      await env.DB.batch([
+        env.DB.prepare(`UPDATE bookings SET payment_method = 'offline' WHERE id = ?1 AND payment_method = 'plan'`).bind(b.id),
+        recomputeStatement(env, b.id),
+      ]);
+    }
+  }
+  // The flags a stopped plan answers.
+  await clearFlagIf(env, b.id, ['plan_overdue', 'plan_stop_failed'], `${formatSydney(nowIso(), 'date')}: instalment plan stopped.`);
+  logEvent('plan_stopped_by_admin', { booking_id: b.id.slice(0, 8), by: user.userId.slice(0, 8) });
+  return redirect(`/admin/bookings/${b.id}?ok=plan-stopped`, 303);
 }
 
 // --- Cancel / restore the whole booking ---------------------------------------------------
@@ -482,7 +623,7 @@ export async function handleAdminCancelBookingConfirm(req, env, params) {
       <p>${KIND_LABELS[b.kind] || b.kind}${b.term_name ? ` · ${b.term_name}` : ''} · ${b.parent_name || b.parent_email}</p>
       <ul>
         <li>Every place it holds is released for other families.</li>
-        ${b.payment_method === 'plan' && b.stripe_subscription_id ? html`<li>The instalment plan is stopped, so no more payments are taken.</li>` : ''}
+        ${planIsLive(b) ? html`<li>The instalment plan is stopped, so no more payments are taken.</li>` : ''}
         ${b.received_cents > 0 ? html`<li>${formatAud(b.received_cents)} has been received — refunds are made in the Stripe dashboard (or by hand for cash and bank transfers).</li>` : ''}
         <li>You can restore it later if the places are still free.</li>
       </ul>
@@ -511,7 +652,7 @@ export async function handleAdminCancelBooking(req, env, params) {
   const reason = cleanText(form.get('reason'), 500);
 
   const booking = await env.DB.prepare(
-    `SELECT id, status, stripe_subscription_id, payment_status FROM bookings WHERE id = ?1`,
+    `SELECT id, status, stripe_subscription_id, payment_status, plan_ended_at FROM bookings WHERE id = ?1`,
   ).bind(params.id).first();
   if (!booking) throw notFound('That booking does not exist.');
 
@@ -519,13 +660,8 @@ export async function handleAdminCancelBooking(req, env, params) {
     const changed = await cancelEndedBooking(env, booking.id, { by: user.userId, reason });
     if (!changed) throw new HttpError(409, 'This booking changed — please review it again.');
     let stopped = true;
-    if (booking.stripe_subscription_id && booking.payment_status !== 'plan_complete') {
-      try {
-        await getPaymentsDriver(env).cancelSubscription(booking.stripe_subscription_id);
-      } catch (err) {
-        stopped = false;
-        logError('subscription_cancel_failed', err, { booking_id: booking.id.slice(0, 8) });
-      }
+    if (booking.stripe_subscription_id && !booking.plan_ended_at) {
+      stopped = (await stopPlan(env, booking.id, { by: user.userId, why: 'booking cancelled' })).ok;
     }
     await appendBookingNote(env, booking.id, `${formatSydney(nowIso(), 'date')}: cancelled by the owner${reason ? ` — ${reason}` : ''}.`);
     logEvent('booking_cancelled_by_admin', { booking_id: booking.id.slice(0, 8), by: user.userId.slice(0, 8), ended: true });
@@ -534,6 +670,17 @@ export async function handleAdminCancelBooking(req, env, params) {
 
   const result = await cancelBooking(env, booking.id, { by: user.userId, reason });
   if (!result.ok && result.error === 'not_found') throw notFound('That booking does not exist.');
+  if (!result.ok && result.error === 'paid') {
+    // The family paid while the owner was cancelling (review finding 11):
+    // confirm it through Check with Stripe's guarded path instead.
+    const row = await env.DB.prepare(
+      `SELECT id, status, payment_ref, payment_method, stripe_subscription_id FROM bookings WHERE id = ?1`,
+    ).bind(booking.id).first();
+    const check = await checkWithStripe(env, row);
+    logEvent('cancel_became_confirm', { booking_id: booking.id.slice(0, 8), check, by: user.userId.slice(0, 8) });
+    return redirect(`/admin/bookings/${booking.id}?ok=cancel-paid&also=${check}`, 303);
+  }
+  if (!result.ok && result.error === 'checkout_open') return redirect(`/admin/bookings/${booking.id}?err=cancel-checkout-open`, 303);
   if (!result.ok) throw new HttpError(409, `This booking is already ${result.error === 'state_changed' ? 'changed' : result.error}.`);
   logEvent('booking_cancelled_by_admin', { booking_id: booking.id.slice(0, 8), by: user.userId.slice(0, 8) });
   return redirect(`/admin/bookings/${booking.id}?ok=${result.subscriptionStopped === false ? 'cancelled-plan-warning' : 'cancelled'}`, 303);
@@ -1110,6 +1257,9 @@ export function registerRoutes(route) {
   route('POST', '/admin/bookings/:id/restore', handleAdminRestoreBooking);
   route('GET', '/admin/bookings/:id/transfer', handleAdminTransfer);
   route('POST', '/admin/bookings/:id/transfer', handleAdminTransferPost);
+  route('POST', '/admin/bookings/:id/record-refund', handleAdminRecordRefund);
+  route('GET', '/admin/bookings/:id/stop-plan', handleAdminStopPlanConfirm);
+  route('POST', '/admin/bookings/:id/stop-plan', handleAdminStopPlan);
   route('GET', '/admin/bookings/:id/cancel-week', handleAdminCancelWeek);
   route('POST', '/admin/bookings/:id/cancel-week', handleAdminCancelWeekPost);
   route('GET', '/admin/customers', handleAdminCustomers);

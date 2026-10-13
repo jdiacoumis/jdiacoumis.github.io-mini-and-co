@@ -28,11 +28,11 @@ async function booking(id, f, { status = 'confirmed', rows = [], kind = 'casual'
   await run(
     `INSERT INTO bookings (id, user_id, child_id, kind, status, list_amount_cents, amount_cents, payment_method,
                            payment_status, plan_instalments, plan_instalment_cents, plan_interval, paid_at,
-                           needs_attention, created_at, expires_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)`,
+                           needs_attention, created_at, expires_at, stripe_subscription_id, plan_ended_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)`,
     id, f.userId, f.childId, kind, status, extra.amount ?? 3000, extra.method ?? 'full', extra.paymentStatus ?? 'paid',
     extra.instalments ?? null, extra.each ?? null, extra.interval ?? null, extra.paidAt ?? null,
-    extra.attention ?? null, at(-24 * 30), expiresAt,
+    extra.attention ?? null, at(-24 * 30), expiresAt, extra.subscription ?? null, extra.planEndedAt ?? null,
   );
   for (const [sessionId, rowStatus = 'booked'] of rows) {
     await run(`INSERT INTO booking_sessions (booking_id, session_id, status) VALUES (?1, ?2, ?3)`, id, sessionId, rowStatus);
@@ -104,6 +104,7 @@ test('reminders: one per (session, booking) for confirmed booked seats in sessio
 test('overdue plans are nudged at most every 7 days, with the amount behind schedule', async () => {
   const plan = (paidAt, attention = null) => ({
     method: 'plan', paymentStatus: 'plan_overdue', amount: 16800, instalments: 6, each: 2800, interval: 'week', paidAt, attention,
+    subscription: 'sub_od',
   });
   const g = await family('od-g', 'Ava');
   const h = await family('od-h');

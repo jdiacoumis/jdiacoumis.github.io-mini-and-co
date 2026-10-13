@@ -7,10 +7,14 @@
 //                       (dedupe reminder:<session>:<booking>). Cancelled
 //                       sessions, cancelled or transferred weeks and unpaid
 //                       holds get nothing.
-//   overdueNudges     — while a plan stays overdue, the family is reminded at
-//                       most once every 7 days (no earlier than 7 days after
-//                       the failure notice), dedupe plan_overdue:<booking>:<ISO
-//                       week>. Plans that ended short are left to the owner.
+//   overdueNudges     — while a plan stays overdue AND its subscription is
+//                       still live (Stripe may still take the card), the
+//                       family is reminded at most once every 7 days (no
+//                       earlier than 7 days after the failure notice), dedupe
+//                       plan_overdue:<booking>:<ISO week>. A plan whose
+//                       subscription has ended — Stripe gave up, or the owner
+//                       stopped it or marked it sorted — gets none: "update
+//                       your card" would change nothing (review finding 5).
 //   reconcileWaitlist — waitlist entries whose offer booking is confirmed are
 //                       marked booked (confirmBooking already does this for
 //                       every payment path; this catches anything else).
@@ -110,6 +114,7 @@ export async function overdueNudges(env, { now }) {
      JOIN users u ON u.id = b.user_id
      JOIN children ch ON ch.id = b.child_id
      WHERE b.status = 'confirmed' AND b.payment_method = 'plan' AND b.payment_status = 'plan_overdue'
+       AND b.stripe_subscription_id IS NOT NULL AND b.plan_ended_at IS NULL
        AND (b.needs_attention IS NULL OR b.needs_attention != 'plan_ended_short')
        AND NOT EXISTS (SELECT 1 FROM email_log el
                        WHERE el.booking_id = b.id AND el.template IN ('plan_failed', 'plan_overdue')

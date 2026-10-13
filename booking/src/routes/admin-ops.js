@@ -36,11 +36,13 @@ import { getPaymentsDriver } from '../lib/payments-driver.js';
 import { sendTemplate, notifyBookingConfirmed } from '../lib/notify.js';
 import { offlineReceipt, payLaterHold } from '../lib/emails/ops.js';
 import { processStripeEvent, refundStatements } from './webhooks.js';
+import { ensurePlanEnd, settlePlanIfPaid } from '../lib/plans.js';
 import { logEvent, logError } from '../lib/log.js';
 import {
   createAdminBooking, findOrCreateParent, createChild, listAttention, resolveAttention, clearFlagIf,
   markAttendance, listCredits, creditState, listVouchers, voucherInUse, VOUCHER_CODE_PATTERN, paymentSummary,
   describeBooking, noticeFor, errorBlock, centsToInput, optionalDollars, addDays, isDateStr, shortDate,
+  resolveForm, PLAN_OUTCOMES,
 } from '../lib/admin-ops.js';
 
 const OFFLINE_METHODS = ['cash', 'bank transfer', 'card (in person)', 'other'];
@@ -513,6 +515,8 @@ export const CHECK_NOTICES = {
   resolved: 'Marked as sorted — the note is saved on the booking.',
   'not-flagged': 'That booking was already sorted.',
   'refunds-added': 'Refunds made in Stripe that were missing here have been added to the payments.',
+  'plan-end-set': 'The instalment plan had no end date in Stripe — it is now set, so it stops after its last instalment.',
+  'plan-stopped-paid': 'Everything this booking owes has been paid, so the instalment plan has been stopped in Stripe.',
 };
 
 // Stripe subscription status → notice key.
@@ -616,7 +620,14 @@ export async function reconcileRefunds(env, bookingId) {
   }
 }
 
-async function checkPlanStatus(env, booking) {
+// A plan's state at Stripe, reconciled (D6; review finding 3): lost
+// instalments are added; a subscription Stripe has ended but whose
+// customer.subscription.deleted never arrived is ended here too (replayed
+// through the webhook's handler); a live one is stopped when everything
+// owed has been paid, and given its end date (cancel_at) when it has none —
+// the end is otherwise set only when checkout.session.completed arrives.
+// `out.also` receives an extra notice key when something was put right.
+async function checkPlanStatus(env, booking, out = {}) {
   let added = 0;
   try {
     added = await reconcileInstalments(env, booking.id);
@@ -629,6 +640,25 @@ async function checkPlanStatus(env, booking) {
   try {
     const sub = await getPaymentsDriver(env).retrieveSubscription(booking.stripe_subscription_id);
     key = Object.hasOwn(PLAN_STATUS_NOTICES, sub.status) ? PLAN_STATUS_NOTICES[sub.status] : 'check-plan-other';
+    const row = await env.DB.prepare(`SELECT plan_ended_at FROM bookings WHERE id = ?1`).bind(booking.id).first();
+    if (sub.status === 'canceled' || sub.status === 'incomplete_expired') {
+      if (!row.plan_ended_at) {
+        await processStripeEvent(env, {
+          type: 'customer.subscription.deleted',
+          data: { object: { id: booking.stripe_subscription_id, status: sub.status, metadata: { booking_id: booking.id } } },
+        });
+      }
+    } else if (!row.plan_ended_at) {
+      const settled = await settlePlanIfPaid(env, booking.id);
+      if (settled && settled.ok && !settled.already) {
+        out.also = 'plan-stopped-paid';
+      } else if (!settled) {
+        const end = await ensurePlanEnd(env, {
+          bookingId: booking.id, subscriptionId: booking.stripe_subscription_id, subscription: sub, onlyIfMissing: true,
+        });
+        if (end === 'set') out.also = 'plan-end-set';
+      }
+    }
   } catch (err) {
     logError('check_plan_failed', err, { booking_id: booking.id.slice(0, 8) });
     return 'check-failed';
@@ -642,12 +672,12 @@ async function checkPlanStatus(env, booking) {
 // confirmation/attention emails, instalment end date); an ended unpaid
 // checkout releases a checkout hold or detaches from a pay-later hold.
 // Returns a CHECK_NOTICES key.
-export async function checkWithStripe(env, booking) {
+export async function checkWithStripe(env, booking, out = {}) {
   if (!booking.payment_ref) {
-    return booking.stripe_subscription_id ? checkPlanStatus(env, booking) : 'check-no-checkout';
+    return booking.stripe_subscription_id ? checkPlanStatus(env, booking, out) : 'check-no-checkout';
   }
   if (booking.status === 'confirmed' && booking.payment_method === 'plan' && booking.stripe_subscription_id) {
-    return checkPlanStatus(env, booking);
+    return checkPlanStatus(env, booking, out);
   }
   let checkout;
   try {
@@ -723,15 +753,11 @@ function attentionRow(b, user, { now, flagged }) {
           </form>` : ''}
         <a href="/admin/bookings/${b.id}#record-payment">Record payment</a>
         ${b.status !== 'cancelled' ? html`<a href="/admin/bookings/${b.id}/cancel">Cancel</a>` : ''}
+        ${b.stripe_subscription_id && !b.plan_ended_at ? html`<a href="/admin/bookings/${b.id}/stop-plan">Stop plan</a>` : ''}
         ${flagged ? html`
           <details class="inline-details">
             <summary>Mark as sorted</summary>
-            <form method="post" action="/admin/bookings/${b.id}/resolve" class="inline-form">
-              ${csrfField(user.csrfToken)}
-              <input type="hidden" name="back" value="attention">
-              <label>What did you do? <input type="text" name="note" maxlength="300" required></label>
-              <button type="submit" class="button-small">Save and clear the flag</button>
-            </form>
+            ${resolveForm(b, user.csrfToken, { back: 'attention', owing: payment.owingCents })}
           </details>` : ''}
       </td>
     </tr>`;
@@ -783,11 +809,13 @@ export async function handleAdminCheckWithStripe(req, env, params) {
     `SELECT id, status, payment_ref, payment_method, stripe_subscription_id FROM bookings WHERE id = ?1`,
   ).bind(params.id).first();
   if (!booking) throw notFound();
-  const result = await checkWithStripe(env, booking);
+  const out = {};
+  const result = await checkWithStripe(env, booking, out);
   const refunds = result === 'check-failed' ? 0 : await reconcileRefunds(env, booking.id);
   logEvent('check_with_stripe', { booking_id: booking.id.slice(0, 8), result, refunds, by: user.userId.slice(0, 8) });
   const outcome = refunds === null ? 'check-failed' : result;
-  return redirect(`${backTo(form, booking.id)}?ok=${outcome}${refunds > 0 ? '&also=refunds-added' : ''}`, 303);
+  const also = [out.also, refunds > 0 ? 'refunds-added' : null].filter(Boolean).map((k) => `&also=${k}`).join('');
+  return redirect(`${backTo(form, booking.id)}?ok=${outcome}${also}`, 303);
 }
 
 // POST /admin/bookings/:id/resolve — clear the attention flag with a note.
@@ -795,10 +823,16 @@ export async function handleAdminResolve(req, env, params) {
   const user = await requireAdmin(req, env);
   const form = await parseForm(req);
   requireCsrf(req, user, form);
-  const exists = await env.DB.prepare(`SELECT id FROM bookings WHERE id = ?1`).bind(params.id).first();
+  const exists = await env.DB.prepare(`SELECT id, needs_attention FROM bookings WHERE id = ?1`).bind(params.id).first();
   if (!exists) throw notFound();
   const note = cleanText(form.get('note'), 300);
-  const resolved = await resolveAttention(env, exists.id, { note, by: user.userId });
+  // An instalment plan that ended short needs the owner's decision about the
+  // rest (review finding 5) — otherwise it would stay "overdue" for good.
+  const planOutcome = PLAN_OUTCOMES.includes(form.get('plan_outcome')) ? form.get('plan_outcome') : null;
+  if (exists.needs_attention === 'plan_ended_short' && !planOutcome) {
+    return redirect(`/admin/bookings/${exists.id}?err=resolve-outcome`, 303);
+  }
+  const resolved = await resolveAttention(env, exists.id, { note, by: user.userId, planOutcome });
   return redirect(`${backTo(form, exists.id)}?ok=${resolved ? 'resolved' : 'not-flagged'}`, 303);
 }
 

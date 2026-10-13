@@ -32,7 +32,7 @@ import {
   creditRedemptionStatements, reverseRedemptionStatements, voucherUseStatements,
   voucherReleaseStatements, loadVoucher,
 } from './ledger.js';
-import { getPaymentsDriver } from './payments-driver.js';
+import { getPaymentsDriver, stopSubscription } from './payments-driver.js';
 
 // A parent's seats are held this long while they pay (Stripe Checkout itself
 // expires after 31 minutes — see payments-driver.js).
@@ -79,6 +79,8 @@ export const NEEDS_ATTENTION_LABELS = {
   plan_ended_short: 'Instalment plan ended before the full amount was paid',
   webhook_mismatch: "Payment doesn't match the booking",
   credit_shortfall: 'Account credit was no longer available when the payment arrived',
+  overpaid: 'Paid more than the booking costs',
+  plan_stop_failed: "Fully paid, but the instalment plan couldn't be stopped in Stripe",
 };
 
 export function formatAud(cents) {
@@ -820,11 +822,18 @@ export async function abandonCheckout(env, bookingId, checkoutRef = null) {
 // can no longer be paid) and its credits/voucher use are given back; a
 // confirmed booking keeps its redemptions (refunds/credits are the owner's
 // call). An instalment plan's subscription is stopped so no further
-// instalments are taken.
+// instalments are taken (and its end recorded: plan_ended_at).
+//
+// A checkout that cannot be expired is asked about (review finding 11): if
+// the family has just paid, nothing is cancelled — error 'paid', and the
+// caller confirms the booking through Check with Stripe instead (cancelling
+// would leave the payment, and an instalment plan's subscription, running
+// against a cancelled booking). If Stripe cannot say, nothing is cancelled
+// either — error 'checkout_open' (try again).
 // Returns { ok, error?, checkoutExpired, subscriptionStopped }.
 export async function cancelBooking(env, bookingId, { by = 'system', reason = '', now = nowIso(), stopPayments = true } = {}) {
   const booking = await env.DB.prepare(
-    `SELECT id, status, payment_ref, stripe_subscription_id, payment_status FROM bookings WHERE id = ?1`,
+    `SELECT id, status, payment_ref, stripe_subscription_id, payment_status, plan_ended_at FROM bookings WHERE id = ?1`,
   ).bind(bookingId).first();
   if (!booking) return { ok: false, error: 'not_found' };
   if (booking.status !== 'pending' && booking.status !== 'confirmed') return { ok: false, error: booking.status };
@@ -832,6 +841,21 @@ export async function cancelBooking(env, bookingId, { by = 'system', reason = ''
   let checkoutExpired = null;
   if (stopPayments && booking.status === 'pending' && booking.payment_ref) {
     checkoutExpired = await tryExpireCheckout(env, booking.payment_ref);
+    if (!checkoutExpired) {
+      let checkout = null;
+      try {
+        checkout = await getPaymentsDriver(env).retrieveCheckout(booking.payment_ref);
+      } catch (err) {
+        logError('checkout_retrieve_failed', err, { booking_id: bookingId.slice(0, 8) });
+      }
+      if (checkout && checkout.status === 'complete') {
+        logEvent('cancel_refused_paid', { booking_id: bookingId.slice(0, 8) });
+        return { ok: false, error: 'paid', checkoutExpired: false, subscriptionStopped: null };
+      }
+      if (!checkout || checkout.status !== 'expired') {
+        return { ok: false, error: 'checkout_open', checkoutExpired: false, subscriptionStopped: null };
+      }
+    }
   }
 
   const results = await env.DB.batch([
@@ -847,13 +871,13 @@ export async function cancelBooking(env, bookingId, { by = 'system', reason = ''
   if (!changed) return { ok: false, error: 'state_changed', checkoutExpired, subscriptionStopped: null };
 
   let subscriptionStopped = null;
-  if (stopPayments && booking.stripe_subscription_id && booking.payment_status !== 'plan_complete') {
-    try {
-      await getPaymentsDriver(env).cancelSubscription(booking.stripe_subscription_id);
-      subscriptionStopped = true;
-    } catch (err) {
-      logError('subscription_cancel_failed', err, { booking_id: bookingId.slice(0, 8) });
-      subscriptionStopped = false;
+  if (stopPayments && booking.stripe_subscription_id && !booking.plan_ended_at) {
+    subscriptionStopped = await stopSubscription(getPaymentsDriver(env), booking.stripe_subscription_id);
+    if (subscriptionStopped) {
+      await env.DB.prepare(`UPDATE bookings SET plan_ended_at = COALESCE(plan_ended_at, ?2) WHERE id = ?1`)
+        .bind(bookingId, now).run();
+    } else {
+      logEvent('subscription_not_stopped', { booking_id: bookingId.slice(0, 8) });
     }
   }
   logEvent('booking_cancelled', { booking_id: bookingId.slice(0, 8), by: String(by).slice(0, 8) });

@@ -73,6 +73,14 @@ async function mockInstalmentsCharged(env, booking) {
   return Math.max(dev.n, ledger.instalments_paid);
 }
 
+// Has the mock subscription been cancelled (Stop plan, fully paid, booking
+// cancelled)? Then, like Stripe, it takes no more instalments.
+async function mockSubscriptionStopped(env, subscriptionId) {
+  if (!subscriptionId) return false;
+  const row = await env.DB.prepare(`SELECT status FROM dev_mock_subscriptions WHERE id = ?1`).bind(subscriptionId).first();
+  return Boolean(row && row.status === 'canceled');
+}
+
 async function runEvents(env, events) {
   for (const evt of events) {
     const { outcome } = await handleVerifiedEvent(env, evt);
@@ -111,6 +119,8 @@ export async function handleMockCheckout(req, env) {
         <button type="submit" name="outcome" value="cancel" class="button-secondary">Cancel</button>
       </form>
     `;
+  } else if (isPlan && booking.status === 'confirmed' && await mockSubscriptionStopped(env, booking.stripe_subscription_id)) {
+    controls = html`<p>This instalment plan has been stopped — no more instalments can be taken.</p>`;
   } else if (isPlan && booking.status === 'confirmed') {
     const totals = await ledgerTotals(env, booking.id);
     controls = html`
@@ -191,6 +201,9 @@ export async function handleMockCheckoutPost(req, env) {
   if (!['instalment_paid', 'instalment_paid_quietly', 'instalment_failed', 'plan_ended'].includes(outcome)) throw notFound();
   if (booking.payment_method !== 'plan' || !booking.stripe_subscription_id) {
     throw new HttpError(409, 'That booking has no instalment plan.');
+  }
+  if (outcome !== 'plan_ended' && await mockSubscriptionStopped(env, booking.stripe_subscription_id)) {
+    throw new HttpError(409, 'This instalment plan has been stopped — no more instalments can be taken.');
   }
   const schedule = instalmentSchedule(booking.amount_cents, booking.plan_instalments, booking.plan_interval || 'week', nowIso());
   const subscriptionDeleted = event('customer.subscription.deleted', {

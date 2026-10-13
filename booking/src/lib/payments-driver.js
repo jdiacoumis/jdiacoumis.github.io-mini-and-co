@@ -38,7 +38,7 @@
 // endpoint's version, not the request's.
 
 import { hmacSha256Hex, timingSafeEqual } from './crypto.js';
-import { logEvent } from './log.js';
+import { logEvent, logError } from './log.js';
 import { uuid, nowIso } from './db.js';
 
 const STRIPE_API = 'https://api.stripe.com/v1';
@@ -104,6 +104,25 @@ async function stripeRequest(env, method, path, params = null) {
 // switch to live mode.
 export function isMissingResource(err) {
   return Boolean(err) && (err.code === 'resource_missing' || err.status === 404);
+}
+
+// Stop a subscription now (no further invoices; Stripe also stops
+// collecting its open ones). One Stripe has already ended — or does not
+// know — counts as stopped. Returns true when it takes no more payments,
+// false when Stripe refused or could not be reached (it may still be live).
+export async function stopSubscription(driver, subscriptionId) {
+  try {
+    await driver.cancelSubscription(subscriptionId);
+    return true;
+  } catch (err) {
+    if (isMissingResource(err)) return true;
+    try {
+      const sub = await driver.retrieveSubscription(subscriptionId);
+      if (sub && (sub.status === 'canceled' || sub.status === 'incomplete_expired')) return true;
+    } catch { /* unreachable too: report the original failure */ }
+    logError('subscription_cancel_failed', err, {});
+    return false;
+  }
 }
 
 function normaliseRefund(refund) {
@@ -420,29 +439,44 @@ function mockDriver(env) {
       };
     },
 
+    // What the mock was told about a subscription lives in the
+    // dev_mock_subscriptions outbox (migration 0006): its end date and
+    // whether it was cancelled.
     async retrieveSubscription(id) {
-      const booking = await env.DB.prepare(
-        `SELECT id, status, paid_at, created_at FROM bookings WHERE stripe_subscription_id = ?1`,
-      ).bind(id).first();
+      const [booking, stored] = await Promise.all([
+        env.DB.prepare(
+          `SELECT id, status, paid_at, created_at FROM bookings WHERE stripe_subscription_id = ?1`,
+        ).bind(id).first(),
+        env.DB.prepare(`SELECT status, cancel_at FROM dev_mock_subscriptions WHERE id = ?1`).bind(String(id)).first(),
+      ]);
       const anchor = Math.floor(Date.parse(booking?.paid_at || booking?.created_at || nowIso()) / 1000);
+      const cancelled = !booking || stored?.status === 'canceled';
       return {
         id,
-        status: booking && booking.status !== 'cancelled' ? 'active' : 'canceled',
+        status: cancelled ? 'canceled' : 'active',
         customerId: null,
         startDate: anchor,
         billingCycleAnchor: anchor,
-        cancelAt: null,
+        cancelAt: stored?.cancel_at ?? null,
         currentPeriodEnd: null,
         metadata: booking ? { booking_id: booking.id } : {},
       };
     },
 
     async setSubscriptionCancelAt(id, unixSeconds) {
+      await env.DB.prepare(
+        `INSERT INTO dev_mock_subscriptions (id, cancel_at, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(id) DO UPDATE SET cancel_at = excluded.cancel_at, updated_at = excluded.updated_at`,
+      ).bind(String(id), Math.floor(unixSeconds), nowIso()).run();
       logEvent('mock_subscription_cancel_at', { subscription: String(id).slice(0, 16), cancel_at: unixSeconds });
       return { id, cancelAt: unixSeconds };
     },
 
     async cancelSubscription(id) {
+      await env.DB.prepare(
+        `INSERT INTO dev_mock_subscriptions (id, status, updated_at) VALUES (?1, 'canceled', ?2)
+         ON CONFLICT(id) DO UPDATE SET status = 'canceled', updated_at = excluded.updated_at`,
+      ).bind(String(id), nowIso()).run();
       logEvent('mock_subscription_cancelled', { subscription: String(id).slice(0, 16) });
       return { id, status: 'canceled' };
     },

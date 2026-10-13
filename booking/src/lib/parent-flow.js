@@ -197,7 +197,9 @@ export function paymentStatusView(booking, { instalmentsPaid = 0, now }) {
         detail: `an instalment didn't go through (${Math.min(instalmentsPaid, n)} of ${n} paid)`, tone: 'alert',
       };
     case 'plan_complete':
-      return { key: 'plan_complete', label: 'Paid', detail: `all ${n} instalments`, tone: 'ok' };
+      // Paid off — by the instalments, or partly another way (the plan was
+      // then stopped early).
+      return { key: 'plan_complete', label: 'Paid', detail: instalmentsPaid >= n ? `all ${n} instalments` : '', tone: 'ok' };
     default:
       return { key: 'unpaid', label: 'Unpaid', detail: owing > 0 ? `${formatAud(owing)} to pay` : '', tone: 'due' };
   }
