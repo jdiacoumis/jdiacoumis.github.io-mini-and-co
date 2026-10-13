@@ -4,10 +4,11 @@ name = "miniandco-site"
 main = "src/index.js"
 compatibility_date = "2026-05-01"
 
-# The asset directory is the repo root: the existing static site is served as-is.
-# Paths listed in /.assetsignore (repo root) are never uploaded or served.
+# Static assets come ONLY from booking/public, which scripts/stage-assets.mjs
+# fills from an explicit allow-list of site files (`npm run dev` and
+# `npm run deploy` stage first). Nothing else in the repository is ever served.
 [assets]
-directory = ".."
+directory = "public"
 binding = "ASSETS"
 html_handling = "auto-trailing-slash"
 not_found_handling = "none"
