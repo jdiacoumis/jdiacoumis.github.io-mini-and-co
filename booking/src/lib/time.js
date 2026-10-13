@@ -68,12 +68,16 @@ export function sydneyWeekday(utcIso) {
   return new Intl.DateTimeFormat('en-AU', { timeZone: TZ, weekday: 'long' }).format(date);
 }
 
+// Whole months of age on the SYDNEY calendar date of `atIso` (default now):
+// a morning class in Sydney is still the previous day in UTC, so a baby
+// turning 6 months that day showed as 5 (review, low).
 export function ageInMonths(dobStr, atIso = null) {
   const dob = new Date(`${dobStr}T00:00:00Z`);
   const at = atIso ? new Date(atIso) : new Date();
   if (Number.isNaN(dob.getTime()) || Number.isNaN(at.getTime())) return null;
-  let months = (at.getUTCFullYear() - dob.getUTCFullYear()) * 12 + (at.getUTCMonth() - dob.getUTCMonth());
-  if (at.getUTCDate() < dob.getUTCDate()) months -= 1;
+  const [y, m, d] = sydneyFields(at.toISOString()).date.split('-').map(Number);
+  let months = (y - dob.getUTCFullYear()) * 12 + (m - 1 - dob.getUTCMonth());
+  if (d < dob.getUTCDate()) months -= 1;
   return Math.max(0, months);
 }
 

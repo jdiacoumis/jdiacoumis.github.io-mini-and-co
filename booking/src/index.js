@@ -165,7 +165,11 @@ export default {
         return withSecurityHeaders(response);
       }
 
-      // No dynamic route matched → static assets (the staged marketing site).
+      // No dynamic route matched. Workers Assets answers requests for staged
+      // files BEFORE the Worker runs (with the headers in public/_headers,
+      // written by scripts/stage-assets.mjs) — so this only sees paths it
+      // did not match, e.g. a method other than GET/HEAD; ask it once more
+      // and turn its 404 into our page.
       const asset = await env.ASSETS.fetch(req);
       if (asset.status === 404) {
         return withSecurityHeaders(errorPage(404, 'We could not find that page.'));

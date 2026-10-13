@@ -143,7 +143,10 @@ export async function run(ctx) {
   });
   ctx.check('the plan choice is recorded with the checkout it belongs to',
     ctx.sql(`SELECT payment_method FROM bookings WHERE id = 'e2e-pf-held-3'`)[0].payment_method === 'plan');
-  const cancelled = await ctx.fetch('/book/cancelled?booking=e2e-pf-held-3', { cookie });
+  const offered = await ctx.fetch('/book/cancelled?booking=e2e-pf-held-3', { cookie });
+  ctx.check('the cancel page offers to cancel the payment, keeping the place', offered.text.includes('Cancel this payment')
+    && offered.text.includes('Your place stays held until'));
+  const cancelled = await ctx.fetch('/book/checkout/release', { method: 'POST', cookie, body: { csrf, booking: 'e2e-pf-held-3', from: 'cancelled' } });
   ctx.check('backing out of a held place keeps it', cancelled.text.includes('No money was taken') && cancelled.text.includes('still held'));
   const [kept] = ctx.sql(`SELECT status, payment_ref, payment_method, plan_instalments FROM bookings WHERE id = 'e2e-pf-held-3'`);
   ctx.check('the hold stays, without the abandoned checkout or its plan choice',

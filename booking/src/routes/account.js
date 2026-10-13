@@ -33,6 +33,9 @@ import {
   closeProviderCheckout, confirmWithoutPayment, updateCardForm, sessionsList, CONTACT_EMAIL, forgetStripeCustomer,
 } from './booking.js';
 
+// How many times Pay now may stretch one booking's hold (see handlePayNowPost).
+export const MAX_HOLD_EXTENSIONS = 2;
+
 const STATUS_LABELS = {
   pending: 'Awaiting payment',
   confirmed: 'Confirmed',
@@ -392,18 +395,24 @@ export async function handlePayNowPost(req, env, params, ctx) {
   // The hosted checkout stays open for about half an hour. A live hold that
   // ends sooner is stretched to the usual checkout hold — and a waitlist
   // offer's deadline with it, so the offer-expiry job leaves it alone — so a
-  // family part-way through paying never loses the place under them. Holds
-  // with longer to run keep their own expiry; a lapsed hold is never revived.
+  // family part-way through paying never loses the place under them. At most
+  // MAX_HOLD_EXTENSIONS times per booking (review, low: pressing Pay now over
+  // and over kept a place held indefinitely); after that the hold ends when
+  // it ends, and a payment arriving later is re-checked for a seat (D6).
+  // Holds with longer to run keep their own expiry; a lapsed hold is never
+  // revived.
   const minHold = isoPlusSeconds(PENDING_BOOKING_EXPIRY_SECS, Date.parse(now));
   if (booking.expires_at < minHold) {
     await env.DB.batch([
       env.DB.prepare(
-        `UPDATE bookings SET expires_at = ?3
-         WHERE id = ?1 AND user_id = ?2 AND status = 'pending' AND expires_at > ?4 AND expires_at < ?3`,
-      ).bind(booking.id, user.userId, minHold, now),
+        `UPDATE bookings SET expires_at = ?3, hold_extensions = hold_extensions + 1
+         WHERE id = ?1 AND user_id = ?2 AND status = 'pending' AND expires_at > ?4 AND expires_at < ?3
+           AND hold_extensions < ?5`,
+      ).bind(booking.id, user.userId, minHold, now, MAX_HOLD_EXTENSIONS),
       env.DB.prepare(
         `UPDATE waitlist SET offer_expires_at = ?3
-         WHERE offer_booking_id = ?1 AND user_id = ?2 AND status = 'offered' AND offer_expires_at > ?4 AND offer_expires_at < ?3`,
+         WHERE offer_booking_id = ?1 AND user_id = ?2 AND status = 'offered' AND offer_expires_at > ?4 AND offer_expires_at < ?3
+           AND EXISTS (SELECT 1 FROM bookings WHERE id = ?1 AND expires_at = ?3)`,
       ).bind(booking.id, user.userId, minHold, now),
     ]);
   }

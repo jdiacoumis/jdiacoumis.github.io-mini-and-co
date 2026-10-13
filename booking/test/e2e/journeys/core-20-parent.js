@@ -123,7 +123,11 @@ export async function run(ctx) {
   const casualId = /booking=([a-f0-9-]+)/.exec(casual.location)?.[1];
   const casualRef = /ref=([A-Za-z0-9_]+)/.exec(casual.location)?.[1];
   const cancelled = await ctx.fetch(`/book/cancelled?booking=${casualId}`, { cookie });
-  ctx.check('cancel page says no money was taken', cancelled.text.includes('No money was taken'));
+  ctx.check('the cancel page (a GET) only offers to cancel — nothing is released by opening it',
+    cancelled.status === 200 && cancelled.text.includes('Cancel this payment and release the place')
+      && ctx.sql(`SELECT status FROM bookings WHERE id = '${casualId}'`)[0].status === 'pending');
+  const released = await ctx.fetch('/book/checkout/release', { method: 'POST', cookie, body: { csrf, booking: casualId, from: 'cancelled' } });
+  ctx.check('cancelling it says no money was taken', released.status === 200 && released.text.includes('No money was taken'));
   const [casualRow] = ctx.sql(`SELECT status FROM bookings WHERE id = '${casualId}'`);
   ctx.check('the pending booking is expired and its seat released', casualRow && casualRow.status === 'expired');
   const late = await ctx.fetch('/dev/mock-checkout', {

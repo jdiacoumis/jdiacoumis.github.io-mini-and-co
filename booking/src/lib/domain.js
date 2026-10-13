@@ -55,6 +55,23 @@ export function isCheckoutHold(booking) {
 
 export const BOOKING_KINDS = ['term', 'casual', 'trial', 'complimentary'];
 
+// A family may have at most this many checkouts under way (pending holds of
+// the 35-minute kind they start themselves), so nobody can hold a class's
+// seats by starting and abandoning checkouts (review, low). Places the owner
+// holds for them (pay-later, offers, re-enrolment) don't count.
+export const MAX_CHECKOUT_HOLDS_PER_ACCOUNT = 3;
+
+// SQL: the number of an account's live checkout holds (?1 user, ?2 now,
+// ?3 CHECKOUT_HOLD_MAX_SECS).
+const LIVE_CHECKOUT_HOLDS_SQL = `(SELECT COUNT(*) FROM bookings lh
+  WHERE lh.user_id = ?1 AND lh.status = 'pending' AND lh.expires_at > ?2
+    AND (julianday(lh.expires_at) - julianday(lh.created_at)) * 86400 <= ?3)`;
+
+export async function liveCheckoutHolds(env, userId, now = nowIso()) {
+  const row = await env.DB.prepare(`SELECT ${LIVE_CHECKOUT_HOLDS_SQL} AS n`).bind(userId, now, CHECKOUT_HOLD_MAX_SECS).first();
+  return row.n;
+}
+
 export const KIND_LABELS = {
   term: 'Term',
   casual: 'Casual',
@@ -433,12 +450,15 @@ export async function prepareBooking(env, {
 // outlast CHECKOUT_HOLD_MAX_SECS (isCheckoutHold tells the two apart).
 // `paymentMethod` defaults from the quote: plan | none (nothing to pay) | full.
 //
+// `maxCheckoutHolds` (the parent checkout): the batch also refuses a hold
+// that would give the account more than that many live checkout holds.
 // Returns { id, expiresAt, amountCents, sessions } or { error, sessions? } with
 // error ∈ no_sessions | unavailable | already_booked | trial_one_session |
-// trial_used | capacity | voucher_invalid | credit_changed.
+// trial_used | capacity | voucher_invalid | credit_changed | too_many_holds.
 export async function createPendingBooking(env, {
   userId, childId, kind, termId = null, sessionIds, quote, waiverVersion = null,
   photoConsent = null, medicalNotes = null, expiresAt = null, paymentMethod = null, now = nowIso(),
+  maxCheckoutHolds = null,
 }) {
   if (!BOOKING_KINDS.includes(kind)) throw new Error(`Unknown booking kind: ${kind}`);
   const unique = [...new Set(sessionIds || [])];
@@ -516,6 +536,10 @@ export async function createPendingBooking(env, {
         [childId, trialClassId, now, bookingId], 'trial')
       : []),
 
+    ...(maxCheckoutHolds !== null && !expiresAt
+      ? txnGuard(env, `${LIVE_CHECKOUT_HOLDS_SQL} <= ?4`, [userId, now, CHECKOUT_HOLD_MAX_SECS, maxCheckoutHolds], 'holds')
+      : []),
+
     ...(quote.voucherCode ? voucherUseStatements(env, quote.voucherCode, { now }) : []),
 
     ...creditRedemptionStatements(env, { bookingId, userId, childId, allocations, now }),
@@ -534,6 +558,9 @@ export async function createPendingBooking(env, {
     logEvent('booking_guard_rejected', { user_id: String(userId).slice(0, 8), lost: lost.length });
     if (lost.length) return { error: 'capacity', sessions: lost };
     if (kind === 'trial' && await childHasTrial(env, childId, trialClassId, now)) return { error: 'trial_used' };
+    if (maxCheckoutHolds !== null && !expiresAt && await liveCheckoutHolds(env, userId, now) >= maxCheckoutHolds) {
+      return { error: 'too_many_holds' };
+    }
     if (quote.voucherCode) {
       const voucher = await loadVoucher(env, quote.voucherCode);
       if (!voucher || !voucher.active || (voucher.max_uses !== null && voucher.uses >= voucher.max_uses)) {

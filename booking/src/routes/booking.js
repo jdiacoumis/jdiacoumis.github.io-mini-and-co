@@ -25,6 +25,7 @@ import {
   listOpenTerms, listOneOffSessions, isReturningFamily, prepareBooking, loadTerm,
   createPendingBooking, attachPaymentRef, confirmBooking, getOwnedBooking, effectiveStatus,
   expireBooking, abandonCheckout, markPurchaseTracked, formatAud, KIND_LABELS,
+  MAX_CHECKOUT_HOLDS_PER_ACCOUNT, liveCheckoutHolds,
 } from '../lib/domain.js';
 import { instalmentSchedule, normaliseVoucherCode } from '../lib/pricing.js';
 import { ledgerTotals } from '../lib/ledger.js';
@@ -47,7 +48,13 @@ export const CONTACT_EMAIL = 'miniandco.classes@gmail.com';
 // payments-driver names: a booking paid through the hosted checkout.
 const ONLINE_PAYMENT_PROVIDERS = ['stripe', 'mock'];
 
+// Voucher codes a family may try in an hour (review, low: codes could be
+// guessed through the checkout page). Applying a code and then booking with
+// it counts twice — plenty for real use.
+export const VOUCHER_TRIES_PER_HOUR = 20;
+
 export const VOUCHER_ERRORS = {
+  rate_limited: "That's a lot of voucher codes in a short time — please wait a while and try again (or book without one).",
   not_found: "We couldn't find that voucher code — please check it.",
   inactive: 'That voucher is no longer active.',
   not_started: "That voucher can't be used yet.",
@@ -486,6 +493,12 @@ async function cannotBookPage(env, user, failure, { child = null, params = null 
       message = 'Please start again from the class list.';
       status = 400;
       break;
+    case 'too_many_holds':
+      title = 'Finish one payment first';
+      message = `You have ${MAX_CHECKOUT_HOLDS_PER_ACCOUNT} bookings waiting for payment. Please finish one — or cancel it from your account — before starting another. Payments you don't finish are cancelled by themselves after about half an hour.`;
+      extra = html`<p><a href="/account" class="button-link button-secondary">Go to my account</a></p>`;
+      status = 429;
+      break;
     default:
       title = "We couldn't find that class";
       message = 'It may have been changed or removed — have a look at the classes that are open now.';
@@ -654,15 +667,20 @@ export async function handleCheckout(req, env) {
   params.childId = child.id;
 
   const now = nowIso();
+  // Every code tried counts towards the hourly limit; over it, the code is
+  // not looked up at all.
+  const voucherLimited = Boolean(params.voucherCode)
+    && !(await allowRate(env, `voucher:user:${user.userId}`, VOUCHER_TRIES_PER_HOUR, 3600));
   const prepared = await prepareBooking(env, {
     userId: user.userId, childId: child.id, kind: params.kind, termId: params.termId,
-    sessionIds: params.sessionIds, voucherCode: params.voucherCode, now,
+    sessionIds: params.sessionIds, voucherCode: voucherLimited ? '' : params.voucherCode, now,
   });
   if (!prepared.ok) return cannotBookPage(env, user, prepared, { child, params });
   const { quote, term, sessions } = prepared;
 
   const title = bookingTitle(quote.kind, term ? term.name : null);
-  const voucherMessage = quote.voucherError ? VOUCHER_ERRORS[quote.voucherError] || 'That voucher cannot be used.' : '';
+  const voucherError = voucherLimited ? 'rate_limited' : quote.voucherError;
+  const voucherMessage = voucherError ? VOUCHER_ERRORS[voucherError] || 'That voucher cannot be used.' : '';
 
   const body = html`
     <h1>Checkout</h1>
@@ -804,12 +822,20 @@ export async function handleCheckoutPost(req, env, _params, ctx) {
     throw tooMany('You have started quite a few bookings in a short time — please give it a few minutes and try again.');
   }
 
+  // Seats are held while a family pays: a few unfinished checkouts at a time.
+  if (await liveCheckoutHolds(env, user.userId) >= MAX_CHECKOUT_HOLDS_PER_ACCOUNT) {
+    return cannotBookPage(env, user, { error: 'too_many_holds' }, { child, params });
+  }
+  const voucherLimited = Boolean(params.voucherCode)
+    && !(await allowRate(env, `voucher:user:${user.userId}`, VOUCHER_TRIES_PER_HOUR, 3600));
+
   const prepared = await prepareBooking(env, {
     userId: user.userId, childId: child.id, kind: params.kind, termId: params.termId,
-    sessionIds: params.sessionIds, voucherCode: params.voucherCode, paymentChoice: params.paymentChoice,
+    sessionIds: params.sessionIds, voucherCode: voucherLimited ? '' : params.voucherCode, paymentChoice: params.paymentChoice,
   });
   if (!prepared.ok) return cannotBookPage(env, user, prepared, { child, params });
   const { quote, term } = prepared;
+  if (voucherLimited) quote.voucherError = 'rate_limited';
   if (quote.voucherError) {
     const body = html`
       <h1>Voucher not applied</h1>
@@ -824,6 +850,7 @@ export async function handleCheckoutPost(req, env, _params, ctx) {
     userId: user.userId, childId: child.id, kind: params.kind, termId: term ? term.id : null,
     sessionIds: quote.sessionIds, quote, waiverVersion: env.WAIVER_VERSION,
     photoConsent: consent.photoConsent, medicalNotes: consent.medical,
+    maxCheckoutHolds: MAX_CHECKOUT_HOLDS_PER_ACCOUNT,
   });
   if (created.error) return cannotBookPage(env, user, created, { child, params });
 
@@ -894,24 +921,8 @@ export async function backOutOfCheckout(env, booking) {
   return outcome === 'detached' ? 'kept' : 'released';
 }
 
-// GET /book/cancelled?booking=… — parent backed out of the hosted checkout.
-export async function handleCancelledPage(req, env) {
-  const user = await requireAuthOrRedirect(req, env);
-  const bookingId = String(new URL(req.url).searchParams.get('booking') || '');
-
-  let outcome = 'inactive';
-  let booking = null;
-  if (isValidId(bookingId)) {
-    booking = await getOwnedBooking(env, bookingId, user.userId);
-    if (booking && booking.status === 'confirmed') return redirect(`/book/confirm?booking=${booking.id}`, 303);
-    // Money already arrived for it: the confirmation page explains.
-    if (booking && (PAYMENT_RECEIVED_FLAGS.includes(booking.needs_attention) || booking.paid_cents > 0)) {
-      return redirect(`/book/confirm?booking=${booking.id}`, 303);
-    }
-    if (booking && booking.status === 'pending') outcome = await backOutOfCheckout(env, booking);
-  }
-  if (outcome === 'paid') return redirect(`/book/confirm?booking=${booking.id}`, 303);
-
+// What happened after the family backed out of a payment.
+function cancelledOutcomePage(user, outcome, booking) {
   const body = {
     released: html`
       <h1>Payment cancelled</h1>
@@ -937,10 +948,46 @@ export async function handleCancelledPage(req, env) {
   return pageResponse('Payment cancelled', page(body), { user, pixel: true });
 }
 
+// GET /book/cancelled?booking=… — where Stripe sends a family who leaves its
+// hosted page. A GET changes nothing (review, low: it used to release the
+// seats with no CSRF check, so any page could link a signed-in family here):
+// it offers a button that does it by POST (/book/checkout/release, CSRF).
+// Doing nothing is fine too — the checkout expires and Stripe's
+// checkout.session.expired webhook releases a checkout hold by itself.
+export async function handleCancelledPage(req, env) {
+  const user = await requireAuthOrRedirect(req, env);
+  const bookingId = String(new URL(req.url).searchParams.get('booking') || '');
+  const booking = isValidId(bookingId) ? await getOwnedBooking(env, bookingId, user.userId) : null;
+  if (booking && booking.status === 'confirmed') return redirect(`/book/confirm?booking=${booking.id}`, 303);
+  // Money already arrived for it: the confirmation page explains.
+  if (booking && (PAYMENT_RECEIVED_FLAGS.includes(booking.needs_attention) || booking.paid_cents > 0)) {
+    return redirect(`/book/confirm?booking=${booking.id}`, 303);
+  }
+  const now = nowIso();
+  if (!booking || effectiveStatus(booking, now) !== 'pending') return cancelledOutcomePage(user, 'inactive', booking);
+  const payLater = isPayLaterHold(booking, now);
+  const body = html`
+    <h1>Payment not finished</h1>
+    <p class="lede">You left the payment page before paying — no money has been taken.</p>
+    <form method="post" action="/book/checkout/release" class="booking-form">
+      ${csrfField(user.csrfToken)}
+      <input type="hidden" name="booking" value="${booking.id}">
+      <input type="hidden" name="from" value="cancelled">
+      <button type="submit">${payLater ? 'Cancel this payment' : 'Cancel this payment and release the place'}</button>
+    </form>
+    <p>${payLater
+    ? html`Your place stays held until ${formatSydney(booking.expires_at)} either way — you can pay from your account.`
+    : 'If you leave it, the payment page closes and the place is released by itself within half an hour.'}</p>
+    <p><a href="/account">Go to my account</a></p>
+  `;
+  return pageResponse('Payment not finished', page(body), { user, pixel: true });
+}
+
 // POST /book/checkout/release — "cancel that payment and start again": the
 // family's own unfinished checkout (e.g. they left Stripe with the browser's
 // back button) is expired at the provider, its hold released, and the parent
-// returned to the checkout they were trying to start.
+// returned to the checkout they were trying to start (from=checkout), their
+// account (from=account) or told what happened (from=cancelled).
 export async function handleReleaseCheckout(req, env) {
   const user = await requireAuthOrRedirect(req, env);
   const form = await parseForm(req);
@@ -957,12 +1004,17 @@ export async function handleReleaseCheckout(req, env) {
     return redirect(`/book/confirm?booking=${booking.id}`, 303);
   }
   const { params } = readCheckoutParams((k) => form.get(k), (k) => form.getAll(k));
-  const fromAccount = form.get('from') === 'account';
+  const from = form.get('from');
+  const fromAccount = from === 'account';
   const back = fromAccount ? '/account?ok=payment-cancelled' : params ? `/book/checkout?${checkoutQuery(params)}` : '/book';
-  if (booking.status !== 'pending') return redirect(fromAccount ? '/account' : back, 303);
+  if (booking.status !== 'pending') {
+    if (from === 'cancelled') return cancelledOutcomePage(user, 'inactive', booking);
+    return redirect(fromAccount ? '/account' : back, 303);
+  }
 
   const outcome = await backOutOfCheckout(env, booking);
   if (outcome === 'paid') return redirect(`/book/confirm?booking=${booking.id}`, 303);
+  if (from === 'cancelled') return cancelledOutcomePage(user, outcome, booking);
   if (outcome === 'held') {
     const body = html`
       <h1>Please try again in a moment</h1>

@@ -4,6 +4,8 @@
 // origin with no inline script, and the files Phase 3 added under booking/
 // (the dev migration, the e2e support module) are never served.
 
+import http from 'node:http';
+
 export const title = 'Cross-feature: staged scripts served, new private files not';
 
 export async function run(ctx) {
@@ -24,9 +26,30 @@ export async function run(ctx) {
 
   ctx.section('Private files stay private');
   for (const path of ['/booking/migrations/0002_dev_outbox.sql', '/migrations/0002_dev_outbox.sql', '/booking/test/e2e/support.js',
-    '/test/e2e/support.js', '/booking/.dev.vars', '/js/../booking/wrangler.toml']) {
+    '/test/e2e/support.js', '/booking/.dev.vars']) {
     const res = await fetch(`${ctx.base}${path}`);
     await res.text();
     ctx.check(`${path} → 404`, res.status === 404, `HTTP ${res.status}`);
   }
+  // fetch() would tidy "/js/../" away before sending: these go out byte for
+  // byte, as an attacker's client would send them.
+  for (const path of ['/js/../booking/wrangler.toml', '/js/%2e%2e/booking/wrangler.toml', '/css/..%2fbooking%2fwrangler.toml', '/js/..\\booking\\wrangler.toml']) {
+    const res = await rawGet(ctx.base, path);
+    ctx.check(`raw ${path} → 404`, res.status === 404 && !res.body.includes('miniandco-booking'), `HTTP ${res.status}`);
+  }
+}
+
+// A GET with the path exactly as given (no URL normalisation).
+function rawGet(base, path) {
+  const { hostname, port } = new URL(base);
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: hostname, port, path, method: 'GET' }, (res) => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode, body }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
 }

@@ -788,6 +788,8 @@ function attendanceControls(r, sessionId, csrfToken) {
 // GET /admin/sessions/:id/roster — admins and staff (facilitators): who is
 // coming, attendance buttons, contacts, and consent/medical notes from the
 // child's CURRENT profile beside the booking snapshot (stricter consent shown).
+// What each family has paid or owes is the owner's business: the payment
+// column is shown to admins only (review, low).
 export async function handleAdminRoster(req, env, params) {
   const user = await requireStaff(req, env);
   const isAdmin = user.role === 'admin';
@@ -801,7 +803,7 @@ export async function handleAdminRoster(req, env, params) {
     const consent = strictestConsent(r.photo_consent_snapshot, r.child_photo_consent);
     const currentNotes = String(r.child_medical_notes || '').trim();
     const snapshotNotes = String(r.medical_notes_snapshot || '').trim();
-    const payment = paymentSummary(r, now);
+    const payment = isAdmin ? paymentSummary(r, now) : null;
     return html`
       <tr id="b-${r.booking_id}" class="attendance-row attendance-row-${r.attendance || 'unmarked'}">
         <td>
@@ -815,7 +817,7 @@ export async function handleAdminRoster(req, env, params) {
         <td data-label="Medical notes" class="roster-medical">${currentNotes || snapshotNotes || '—'}${currentNotes && snapshotNotes && currentNotes !== snapshotNotes
           ? html`<br><span class="muted">At booking: ${snapshotNotes}</span>` : ''}</td>
         <td data-label="Booking">${KIND_LABELS[r.kind] || r.kind}</td>
-        <td data-label="Payment">${payment.label}</td>
+        ${isAdmin ? html`<td data-label="Payment">${payment.label}</td>` : ''}
       </tr>
     `;
   });
@@ -830,7 +832,7 @@ export async function handleAdminRoster(req, env, params) {
       ${rows.length ? html`
         <div class="table-scroll">
           <table class="booking-table roster-table">
-            <thead><tr><th>Child</th><th>Attendance</th><th>Parent</th><th>Photos OK</th><th>Medical notes</th><th>Booking</th><th>Payment</th></tr></thead>
+            <thead><tr><th>Child</th><th>Attendance</th><th>Parent</th><th>Photos OK</th><th>Medical notes</th><th>Booking</th>${isAdmin ? html`<th>Payment</th>` : ''}</tr></thead>
             <tbody>${joinHtml(rows)}</tbody>
           </table>
         </div>

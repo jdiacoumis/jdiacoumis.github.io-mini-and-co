@@ -132,6 +132,12 @@ export async function handleAddChild(req, env) {
   return pageResponse('Add a child', body, { user });
 }
 
+// A family account holds at most this many children (review, low: no cap
+// let one account create profiles without end). The owner can add more
+// from the admin pages.
+export const MAX_CHILDREN_PER_ACCOUNT = 6;
+const TOO_MANY_CHILDREN = `You can add up to ${MAX_CHILDREN_PER_ACCOUNT} children here — if you need to add more, just email us and we'll help.`;
+
 // POST /account/children/new — create a child profile.
 export async function handleAddChildPost(req, env) {
   const user = await requireAuthOrRedirect(req, env);
@@ -140,19 +146,23 @@ export async function handleAddChildPost(req, env) {
 
   const next = safeNextPath(String(form.get('next') || ''), '');
   const { values, error } = validateChildForm(form);
-  if (error) {
-    const body = html`<h1>Add a child</h1>${childForm({
-      action: '/account/children/new', values, error, csrfToken: user.csrfToken, submitLabel: 'Save child', next,
-    })}`;
-    return pageResponse('Add a child', body, { user, status: 400 });
-  }
+  const again = (message) => pageResponse('Add a child', html`<h1>Add a child</h1>${childForm({
+    action: '/account/children/new', values, error: message, csrfToken: user.csrfToken, submitLabel: 'Save child', next,
+  })}`, { user, status: 400 });
+  if (error) return again(error);
 
+  // The cap is part of the insert itself, so two quick submits can't pass it.
   const childId = uuid();
-  await env.DB.prepare(
+  const inserted = await env.DB.prepare(
     `INSERT INTO children (id, user_id, name, dob, medical_notes, photo_consent, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
+     WHERE (SELECT COUNT(*) FROM children WHERE user_id = ?2 AND archived_at IS NULL) < ?8`,
   ).bind(childId, user.userId, values.name, values.dob, values.medical,
-    values.photo_consent === 'yes' ? 1 : 0, nowIso()).run();
+    values.photo_consent === 'yes' ? 1 : 0, nowIso(), MAX_CHILDREN_PER_ACCOUNT).run();
+  if (inserted.meta.changes === 0) {
+    logEvent('child_cap_reached', { user_id: user.userId.slice(0, 8) });
+    return again(TOO_MANY_CHILDREN);
+  }
 
   // Security: log ids only — never the child's name or medical content.
   logEvent('child_created', { user_id: user.userId.slice(0, 8), child_id: childId.slice(0, 8) });

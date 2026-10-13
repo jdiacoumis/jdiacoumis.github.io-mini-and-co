@@ -33,7 +33,7 @@
 
 import { spawn, execFileSync } from 'node:child_process';
 import {
-  mkdtempSync, rmSync, readdirSync, existsSync, writeFileSync, mkdirSync,
+  mkdtempSync, rmSync, readdirSync, existsSync, writeFileSync, mkdirSync, symlinkSync, lstatSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -48,24 +48,46 @@ const filters = process.argv.slice(2);
 
 // Private files that exist on disk but must never be published (site-
 // publishing spec). Created for the run if absent, removed afterwards — a
-// file that already existed (e.g. a real .DS_Store) is left alone.
+// file that already existed (e.g. a real .DS_Store) is left alone — so the
+// publishing checks (core-10-assets) prove that the allow-list and its
+// filters are what keep each one private, not merely that it doesn't exist:
+// files outside the allow-list, and inside allow-listed folders a dotfile,
+// a junk file and a symlink to a private file.
 const PROBES = [
-  { path: join(REPO, 'business', 'zz-probe.md'), content: '# private probe — must never be served\n' },
-  { path: join(REPO, '.DS_Store'), content: 'probe' },
+  { path: 'business/zz-probe.md', content: '# private probe — must never be served\n' },
+  { path: 'business/x.md', content: '# private probe\n' },
+  { path: '.DS_Store', content: 'probe' },
+  { path: '.dev.vars', content: 'PROBE=1\n' },
+  { path: 'openspec/x', content: 'probe' },
+  { path: 'openspec/project.md', content: '# probe\n' },
+  { path: 'assets/.DS_Store', content: 'probe' },
+  { path: 'assets/Thumbs.db', content: 'probe' },
+  { path: 'js/.env', content: 'SECRET=probe\n' },
+  { path: 'assets/zz-probe-link.svg', symlinkTo: '../CLAUDE.md' },
 ];
 const createdProbes = [];
 const createdDirs = [];
 
 function placeProbes() {
   for (const probe of PROBES) {
-    if (existsSync(probe.path)) continue;
-    const dir = dirname(probe.path);
+    const path = join(REPO, probe.path);
+    if (existsSync(path) || isLink(path)) continue;
+    const dir = dirname(path);
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
       createdDirs.push(dir);
     }
-    writeFileSync(probe.path, probe.content);
-    createdProbes.push(probe.path);
+    if (probe.symlinkTo) symlinkSync(probe.symlinkTo, path);
+    else writeFileSync(path, probe.content);
+    createdProbes.push(path);
+  }
+}
+
+function isLink(path) {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
   }
 }
 
@@ -114,6 +136,8 @@ function makeCtx({ base, dbFile, results }) {
   const ctx = {
     base,
     repo: REPO,
+    // Repo-relative paths of the private probe files placed for this run.
+    probes: PROBES.map((p) => p.path),
 
     async fetch(path, { method = 'GET', body = null, headers = {}, cookie = null, ip = null } = {}) {
       const h = { ...headers };
@@ -275,6 +299,14 @@ async function main() {
     console.error(`\nServer log tail:\n${serverLog.slice(-3000)}`);
     process.exitCode = 1;
   }
+}
+
+// Interrupted (Ctrl-C): take the probe files away again.
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    removeProbes();
+    process.exit(130);
+  });
 }
 
 main().catch((err) => {
