@@ -15,6 +15,7 @@ import {
 } from './helpers.js';
 import { createTermsWithSessions, planTermDates, sameWeekDate, weekOf } from '../../src/lib/admin-ops.js';
 import * as adminTerms from '../../src/routes/admin-terms.js';
+import { planForClass } from '../../src/routes/admin-terms.js';
 
 const { env, dispose } = await createTestDb();
 after(() => dispose());
@@ -135,4 +136,17 @@ test('Monday + Wednesday from one form: the same weeks, the same holiday week sk
     formRequest('GET', location, { cookie: admin.cookie }), env, { id: termId });
   const text = await grid.text();
   assert.match(text, /This holiday date was\s+not in any week of the term, so it was not used: Wed,? 7 Jul(y)? 2032/);
+});
+
+test('the other classes span exactly the primary class\'s weeks, however the length is given', () => {
+  const wednesday = { id: 'wed', weekday: 3 };
+  const monday = { id: 'mon', weekday: 1 };
+  const friday = { id: 'fri', weekday: 5 };
+  const byWeeks = { startsOn: '2032-02-04', weeks: 3, endsOn: null, skipDates: [] };
+  const byEnd = { startsOn: '2032-02-04', weeks: null, endsOn: '2032-02-23', skipDates: [] }; // a Monday after the last Wednesday
+  assert.deepEqual(planForClass(wednesday, wednesday, byEnd).dates, ['2032-02-04', '2032-02-11', '2032-02-18']);
+  for (const dates of [byWeeks, byEnd]) {
+    assert.deepEqual(planForClass(monday, wednesday, dates).dates, ['2032-02-02', '2032-02-09', '2032-02-16'], 'no extra Monday');
+    assert.deepEqual(planForClass(friday, wednesday, dates).dates, ['2032-02-06', '2032-02-13', '2032-02-20']);
+  }
 });

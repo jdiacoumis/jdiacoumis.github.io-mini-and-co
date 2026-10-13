@@ -29,6 +29,7 @@ import { reenrolInvitation } from '../lib/emails/ops.js';
 import { logEvent, logError } from '../lib/log.js';
 import {
   planTermDates, parseDateList, sessionStartsFor, datetimeLocalToUtc, utcToDatetimeLocal, rerunDefaults, sameWeekDate,
+  daysBetween,
   addDays, isDateStr, createTermsWithSessions, termNameTaken, listTermsOverview, loadTermGrid, GRID_CELLS,
   syncTermDates, removeTermSession, sessionHasBookings, autoEnrolCandidates, autoEnrolChild, autoEnrolExpiry,
   noticeFor, errorBlock, centsToInput, optionalDollars, shortDate,
@@ -351,11 +352,15 @@ export function planForClass(cls, primary, dates) {
     return planTermDates({ ...dates, weekday: cls.weekday });
   }
   // The primary's dates are checked first (its weekday must match); every
-  // other class follows them into the same weeks.
+  // other class follows them into exactly the same weeks: from the week of
+  // the primary's first class to the week of its last (a "last class date"
+  // that isn't the primary's weekday counts as its last class before it).
+  const lastWeek = dates.endsOn
+    ? addDays(dates.startsOn, 7 * Math.floor(daysBetween(dates.startsOn, dates.endsOn) / 7))
+    : addDays(dates.startsOn, 7 * (dates.weeks - 1));
   return planTermDates({
     startsOn: sameWeekDate(dates.startsOn, cls.weekday),
-    weeks: dates.weeks,
-    endsOn: dates.endsOn ? sameWeekDate(dates.endsOn, cls.weekday) : null,
+    endsOn: sameWeekDate(lastWeek, cls.weekday),
     skipDates: dates.skipDates,
     weekday: cls.weekday,
   });
