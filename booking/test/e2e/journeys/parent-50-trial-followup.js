@@ -60,9 +60,9 @@ export async function run(ctx) {
   const log = ctx.sql(`SELECT template, status FROM email_log WHERE dedupe_key = 'trial_followup:e2e-pf-trial-1'`);
   ctx.check('the send is logged once under its dedupe key', log.length === 1 && log[0].template === 'trial_followup' && log[0].status === 'sent');
 
-  await ctx.runCron();
-  await new Promise((r) => setTimeout(r, 1500));
-  ctx.check('running the jobs again sends nothing more', (await ctx.mailbox(EMAIL)).filter(isFollowUp).length === 1);
+  ctx.check('a second run (to completion) sends nothing more', (await ctx.runCron()) === 200
+    && (await ctx.mailbox(EMAIL)).filter(isFollowUp).length === 1
+    && ctx.sql(`SELECT COUNT(*) AS n FROM email_log WHERE dedupe_key = 'trial_followup:e2e-pf-trial-1'`)[0].n === 1);
 
   if (link) {
     const checkout = await ctx.fetch(link.replace(/^http:\/\/[^/]+/, ''), { cookie });

@@ -138,30 +138,12 @@ export async function waitFor(ready, timeoutMs = 10000) {
   return ready();
 }
 
-// Run the Worker's scheduled() handler and wait until its jobs have finished.
-// scheduled() works in waitUntil, after the HTTP response, so each run plants
-// a waitlist entry whose offer is already paid: reconcileWaitlist — the last
-// job — marks it booked. (The sentinel booking holds no seat.)
-export function cronRunner(ctx, key) {
-  const user = `x-cron-${key}-u`;
-  const term = `x-cron-${key}-t`;
-  ctx.sqlWrite(`INSERT INTO users (id, email, created_at) VALUES (${q(user)}, ${q(`x-cron-${key}@example.com`)}, ${NOW})`);
-  ctx.sqlWrite(`INSERT INTO terms (id, class_id, name, starts_on, ends_on, term_price_cents, casual_price_cents, status, created_at)
-                VALUES (${q(term)}, 'cls-wed-11', ${q(`X cron sentinel ${key}`)}, date('now'), date('now'), 0, 0, 'draft', ${NOW})`);
-  ctx.sqlWrite(`INSERT INTO children (id, user_id, name, dob, created_at) VALUES (${q(`${user}-c0`)}, ${q(user)}, 'Sentinel', '2026-01-01', ${NOW})`);
-  ctx.sqlWrite(`INSERT INTO bookings (id, user_id, child_id, kind, term_id, status, amount_cents, created_at)
-                VALUES (${q(`${user}-b`)}, ${q(user)}, ${q(`${user}-c0`)}, 'complimentary', ${q(term)}, 'confirmed', 0, ${NOW})`);
-  let runs = 0;
+// Run the Worker's scheduled() handler and wait until its jobs have finished
+// (ctx.runCron plants a marker the last job resolves — test/e2e/run.js).
+export function cronRunner(ctx) {
   return async () => {
-    runs += 1;
-    const child = `${user}-c${runs}`;
-    const entry = `${user}-w${runs}`;
-    ctx.sqlWrite(`INSERT INTO children (id, user_id, name, dob, created_at) VALUES (${q(child)}, ${q(user)}, 'Sentinel', '2026-01-01', ${NOW})`);
-    ctx.sqlWrite(`INSERT INTO waitlist (id, term_id, user_id, child_id, status, joined_at, offer_booking_id)
-                  VALUES (${q(entry)}, ${q(term)}, ${q(user)}, ${q(child)}, 'offered', ${NOW}, ${q(`${user}-b`)})`);
     const status = await ctx.runCron();
-    const finished = await waitFor(() => ctx.sql(`SELECT status FROM waitlist WHERE id = ${q(entry)}`)[0].status === 'booked');
-    if (status !== 200 || !finished) throw new Error(`scheduled() run ${runs} did not finish (HTTP ${status})`);
+    if (status !== 200) throw new Error(`scheduled() answered HTTP ${status}`);
     return true;
   };
 }

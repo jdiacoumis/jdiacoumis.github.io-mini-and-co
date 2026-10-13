@@ -28,7 +28,10 @@ export async function createSession(env, userId) {
 }
 
 export async function getSession(env, sessionId) {
-  if (typeof sessionId !== 'string' || sessionId.length < 20) return null;
+  // Session ids are 43-character base64url tokens (randomToken): anything
+  // else is refused without hashing it or asking the database.
+  if (typeof sessionId !== 'string' || sessionId.length < 20 || sessionId.length > 128
+    || !/^[A-Za-z0-9_-]+$/.test(sessionId)) return null;
 
   const sessionHash = await sha256Hex(sessionId);
   const now = nowIso();

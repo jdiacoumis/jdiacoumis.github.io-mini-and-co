@@ -256,7 +256,8 @@ export async function run(ctx) {
   ctx.section('Cancel a session');
   const cancelPage = await ctx.fetch(`/admin/sessions/${w6}/cancel`, { cookie: admin });
   ctx.check('the confirm page lists each family and credit', cancelPage.status === 200 && cancelPage.text.includes('Ben')
-    && cancelPage.text.includes('No credit') && cancelPage.text.includes('$60.00 in total'));
+    && cancelPage.text.includes('No credit') && cancelPage.text.includes('$60.00 in total')
+    && cancelPage.text.includes('Price reduced by $30.00') && cancelPage.text.includes(`name="credit_${a.bookingId}" value="30.00"`));
   const noReason = await ctx.fetch(`/admin/sessions/${w6}/cancel`, { method: 'POST', cookie: admin, body: { csrf, reason: '' } });
   ctx.check('a reason is required', noReason.status === 400);
   const cancelled = await ctx.fetch(`/admin/sessions/${w6}/cancel`, { method: 'POST', cookie: admin, body: { csrf, reason: 'Venue closed' } });
@@ -269,7 +270,15 @@ export async function run(ctx) {
   ctx.check('paid families are credited (term per week, casual what they paid)',
     w6Credits.length === 2 && w6Credits.every((cr) => cr.amount_cents === 3000)
       && w6Credits.some((cr) => cr.source_booking_id === a.bookingId) && w6Credits.some((cr) => cr.source_booking_id === d.bookingId), JSON.stringify(w6Credits));
-  ctx.check('the cancellation notice was sent', ctx.sql(`SELECT COUNT(*) AS n FROM email_log WHERE session_id = '${w6}'`)[0].n >= 1);
+  const notices = ctx.sql(`SELECT booking_id FROM email_log WHERE session_id = '${w6}' AND template = 'session_cancelled' ORDER BY booking_id`);
+  ctx.check('each of the four families got the class-cancelled notice (the owner summary is separate)',
+    notices.length === 4 && [a, b, c, d].every((x) => notices.some((n) => n.booking_id === x.bookingId)), JSON.stringify(notices));
+  ctx.check('the owner got the summary', ctx.sql(`SELECT COUNT(*) AS n FROM email_log WHERE session_id = '${w6}' AND template = 'owner_session_cancelled'`)[0].n === 1);
+  const [benHold] = ctx.sql(`SELECT status, list_amount_cents, amount_cents FROM bookings WHERE id = '${b.bookingId}'`);
+  ctx.check("the unpaid hold costs a week less, and Ben's family is told (review finding 8)",
+    benHold.status === 'pending' && benHold.amount_cents === 12000 && benHold.list_amount_cents === 12000
+      && (await ctx.mailbox('e2e-admin-b@example.com')).some((m) => m.subject.startsWith('Class cancelled') && m.body.includes("it's now $120.00")),
+    JSON.stringify(benHold));
   const gridCancelled = await ctx.fetch(`/admin/terms/${t10.id}`, { cookie: admin });
   ctx.check('the grid marks the cancelled week', gridCancelled.text.includes('grid-week-cancelled') && gridCancelled.text.includes('grid-cell grid-moved'));
 

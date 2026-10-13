@@ -94,7 +94,9 @@ export async function run(ctx) {
   ctx.check('a term that is not open yet shows when bookings open and nothing to book',
     laterBlock.includes('Bookings open') && !laterBlock.includes('kind=term') && !laterBlock.includes('name="session"')
       && !laterBlock.includes('Families enrolled last term'), laterBlock.slice(0, 400));
-  ctx.check('classes are grouped with their terms', list.indexOf('PF Started Class') < list.indexOf('Started Term'));
+  const classAt = list.indexOf('PF Started Class');
+  const termAt = list.indexOf('Started Term');
+  ctx.check('classes are grouped with their terms', classAt >= 0 && termAt >= 0 && classAt < termAt, `${classAt} ${termAt}`);
 
   ctx.section('Returning-family window');
   // Last term (closed) and the next one: open to its families since

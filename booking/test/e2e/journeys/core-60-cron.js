@@ -42,9 +42,8 @@ export async function run(ctx) {
                 VALUES ('e2e-old-token', 'old@example.com', '2020-01-01T00:20:00Z', '2020-01-01T00:00:00Z')`);
   ctx.sqlWrite(`INSERT INTO webhook_events (event_id, status, received_at) VALUES ('evt_e2e_old', 'done', '2020-01-01T00:00:00Z')`);
 
-  const status = await ctx.runCron();
+  const status = await ctx.runCron(); // returns once every job has finished
   ctx.check('the scheduled handler runs', status === 200, `HTTP ${status}`);
-  await new Promise((r) => setTimeout(r, 1500)); // scheduled() work runs in waitUntil
 
   const [swept] = ctx.sql(`SELECT status FROM bookings WHERE id = '${bookingId}'`);
   ctx.check('the lapsed hold is expired', swept.status === 'expired');
@@ -60,8 +59,19 @@ export async function run(ctx) {
   ctx.check('old sign-in tokens are purged', ctx.sql(`SELECT COUNT(*) AS n FROM auth_tokens WHERE token_hash = 'e2e-old-token'`)[0].n === 0);
   ctx.check('old webhook events are purged', ctx.sql(`SELECT COUNT(*) AS n FROM webhook_events WHERE event_id = 'evt_e2e_old'`)[0].n === 0);
 
+  // Everything this journey's jobs touched, to compare after a second run.
+  const snapshot = () => JSON.stringify({
+    bookings: ctx.sql(`SELECT id, status, expires_at FROM bookings WHERE id IN ('${bookingId}', '${offerId}') ORDER BY id`),
+    credit: ctx.sql(`SELECT remaining_cents FROM credits WHERE id = 'e2e-cron-credit'`),
+    redemptions: ctx.sql(`SELECT COUNT(*) AS n FROM credit_redemptions WHERE credit_id = 'e2e-cron-credit'`),
+    waitlist: ctx.sql(`SELECT status, note, offer_expires_at, offer_booking_id FROM waitlist WHERE id = 'e2e-wait-1'`),
+    emails: ctx.sql(`SELECT template, status FROM email_log WHERE user_id = '${user.id}'
+                     OR booking_id IN ('${bookingId}', '${offerId}') ORDER BY id`),
+  });
+  const before = snapshot();
+  ctx.check('the lapsed offer was reported to the owner once',
+    ctx.sql(`SELECT COUNT(*) AS n FROM email_log WHERE booking_id = '${offerId}' AND template = 'owner_offer_lapsed'`)[0].n === 1);
   const second = await ctx.runCron();
-  await new Promise((r) => setTimeout(r, 1000));
-  const [stillWaiting] = ctx.sql(`SELECT status FROM waitlist WHERE id = 'e2e-wait-1'`);
-  ctx.check('running the jobs again changes nothing', second === 200 && stillWaiting.status === 'waiting');
+  ctx.check('running the jobs again (to completion) changes nothing: bookings, credit, waitlist, emails',
+    second === 200 && snapshot() === before, snapshot());
 }

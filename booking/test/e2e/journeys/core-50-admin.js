@@ -83,7 +83,9 @@ export async function run(ctx) {
   const ledger = ctx.sql(`SELECT kind, method, note FROM payments WHERE booking_id = '${bookingId}'`);
   ctx.check('the ledger has one offline row', ledger.length === 1 && ledger[0].kind === 'offline' && ledger[0].method === 'cash', JSON.stringify(ledger));
   const bookings = await ctx.fetch('/admin/bookings', { cookie: admin });
-  ctx.check('bookings list shows owed, paid and payment status', bookings.text.includes('Ollie') && bookings.text.includes('$30.00') && bookings.text.includes('Paid'));
+  const ownRow = new RegExp(`<tr[^>]*>(?:(?!</tr>)[\\s\\S])*?/admin/bookings/${bookingId}"(?:(?!</tr>)[\\s\\S])*</tr>`).exec(bookings.text)?.[0] || '';
+  ctx.check("the booking's own row in the list shows owed $30.00, received $30.00 and Paid",
+    ownRow.includes('Ollie') && /<td>\$30\.00<\/td>\s*<td>\$30\.00<\/td>\s*<td>Paid/.test(ownRow), ownRow.slice(0, 600));
 
   const cancel = await ctx.fetch(`/admin/bookings/${bookingId}/cancel`, { method: 'POST', cookie: admin, body: { csrf } });
   ctx.check('admin cancels the booking', cancel.status === 303);

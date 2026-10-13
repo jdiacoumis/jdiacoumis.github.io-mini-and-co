@@ -78,9 +78,11 @@ export async function run(ctx) {
   ctx.check('after the sixth instalment the plan is complete',
     complete.paid_cents === 16800 && complete.payment_status === 'plan_complete' && complete.plan_next_charge_at === null,
     JSON.stringify(complete));
-  await mockAction(ctx, cookie, csrf, bookingId, 'instalment_paid');
+  const seventh = await mockAction(ctx, cookie, csrf, bookingId, 'instalment_paid');
   const rows = ctx.sql(`SELECT COUNT(*) AS n FROM payments WHERE booking_id = '${bookingId}' AND kind = 'instalment'`);
-  ctx.check('no instalment beyond the sixth', rows[0].n === 6, JSON.stringify(rows));
+  ctx.check('no instalment beyond the sixth: the completed plan was stopped, so the (mock) provider takes no more',
+    rows[0].n === 6 && seventh.status === 409 && seventh.text.includes('has been stopped')
+      && ctx.sql(`SELECT plan_ended_at FROM bookings WHERE id = '${bookingId}'`)[0].plan_ended_at !== null, JSON.stringify(rows));
 
   ctx.section('A plan that ends short');
   const second = await ctx.fetch('/book/checkout', {

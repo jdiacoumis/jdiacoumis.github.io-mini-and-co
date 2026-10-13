@@ -292,3 +292,31 @@ test('confirmBooking stays the only path: a stale pending booking confirmed via 
   const result = await confirmBooking(env, booking.id, { provider: 'mock' });
   assert.equal(result.reconfirmed, true);
 });
+
+test('the endpoint answers a bad Stripe signature with 400 invalid_signature and records nothing', async () => {
+  const { hmacSha256Hex } = await import('../../src/lib/crypto.js');
+  const stripeEnv = { ...env, PAYMENTS_DRIVER: 'stripe', STRIPE_SECRET_KEY: 'sk_test_x', STRIPE_WEBHOOK_SECRET: 'whsec_right' };
+  const fam = await seedFamilyAndTerm(env, { prefix: 'w13' });
+  const booking = await pendingBooking(fam);
+  const event = checkoutCompleted(booking);
+  const body = JSON.stringify(event);
+  const t = Math.floor(Date.now() / 1000);
+  const post = (signature) => handleStripeWebhook(new Request('https://example.com/api/stripe/webhook', {
+    method: 'POST', body, headers: { 'Content-Type': 'application/json', ...(signature ? { 'Stripe-Signature': signature } : {}) },
+  }), stripeEnv);
+  const rejected = async (signature, why) => {
+    const res = await post(signature);
+    assert.equal(res.status, 400, why);
+    assert.deepEqual(await res.json(), { error: 'invalid_signature' }, why);
+  };
+  await rejected(`t=${t},v1=${await hmacSha256Hex('whsec_wrong', `${t}.${body}`)}`, 'signed with another secret');
+  await rejected(null, 'no signature header');
+  await rejected(`t=${t - 600},v1=${await hmacSha256Hex('whsec_right', `${t - 600}.${body}`)}`, 'outside the 5-minute tolerance');
+  await rejected(`t=${t},v1=${await hmacSha256Hex('whsec_right', `${t}.${body} `)}`, 'a tampered body');
+  assert.equal(await eventRow(event.id), null, 'nothing claimed');
+  assert.equal((await row(booking.id)).status, 'pending', 'nothing confirmed');
+  // The same event, correctly signed, goes through — so the 400s were about the signature.
+  const ok = await post(`t=${t},v1=${await hmacSha256Hex('whsec_right', `${t}.${body}`)}`);
+  assert.equal(ok.status, 200);
+  assert.equal((await row(booking.id)).status, 'confirmed');
+});

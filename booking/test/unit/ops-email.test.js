@@ -148,6 +148,8 @@ test('every email route is admin-only, and every POST needs the CSRF token', asy
   for (const r of routes) {
     const anon = await outcome(r.handler(request(r.method, r.pattern, { form: r.method === 'POST' ? {} : null }), env, {}));
     assert.ok(anon instanceof Response && anon.status === 303, `${r.method} ${r.pattern} signed out`);
+    assert.equal(anon.headers.get('Location'), `/auth/request-magic-link?next=${encodeURIComponent(r.pattern)}`,
+      `${r.method} ${r.pattern} sends a signed-out visitor to sign in, then back`);
     const denied = await outcome(r.handler(request(r.method, r.pattern, { cookie: parent.cookie, form: r.method === 'POST' ? { csrf: parent.csrf } : null }), env, {}));
     assert.ok(denied instanceof HttpError && denied.status === 403, `${r.method} ${r.pattern} as a parent`);
     if (r.method === 'POST') {

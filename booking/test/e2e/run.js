@@ -27,7 +27,8 @@
 //   sql(query)             → rows (read-only, straight from the dev database)
 //   sqlWrite(query)        → runs a write against the dev database (test setup
 //                            such as "time passes"); use sparingly
-//   runCron()              → triggers the Worker's scheduled() handler
+//   runCron()              → runs the Worker's scheduled() handler and waits
+//                            until every job has finished; → HTTP status
 //   sydneyDate(daysFromNow)→ 'YYYY-MM-DD' in Australia/Sydney
 //   repo                   path of the repository root
 
@@ -130,8 +131,11 @@ function findDatabaseFile(stateDir) {
   return join(dir, file);
 }
 
+const SQL_NOW = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')";
+
 function makeCtx({ base, dbFile, results }) {
   let signIns = 0;
+  let cronRuns = 0;
 
   const ctx = {
     base,
@@ -221,11 +225,37 @@ function makeCtx({ base, dbFile, results }) {
     // wrangler dev --test-scheduled exposes /__scheduled, which calls the
     // Worker's scheduled() handler in-process. (Wrangler 4.86's
     // /cdn-cgi/handler/scheduled route fails in dev with Workers Assets: its
-    // proxy cannot serialise the ScheduledController.)
+    // proxy cannot serialise the ScheduledController.) scheduled() works in
+    // waitUntil, after /__scheduled has answered, so each run plants a marker
+    // only the LAST job resolves — a waitlist entry whose offer is already
+    // paid, which reconcileWaitlist marks booked — and waits for it. Checks
+    // made after runCron() therefore see every job's work (and a second run
+    // that changes nothing really ran).
     async runCron() {
+      cronRuns += 1;
+      const user = 'e2e-cron-marker-u';
+      const term = 'e2e-cron-marker-t';
+      if (cronRuns === 1) {
+        ctx.sqlWrite(`INSERT OR IGNORE INTO users (id, email, created_at) VALUES ('${user}', 'e2e-cron-marker@example.com', ${SQL_NOW})`);
+        ctx.sqlWrite(`INSERT OR IGNORE INTO terms (id, class_id, name, starts_on, ends_on, term_price_cents, casual_price_cents, status, created_at)
+                      VALUES ('${term}', 'cls-wed-11', 'E2E cron marker', date('now'), date('now'), 0, 0, 'draft', ${SQL_NOW})`);
+        ctx.sqlWrite(`INSERT OR IGNORE INTO children (id, user_id, name, dob, created_at) VALUES ('${user}-c0', '${user}', 'Marker', '2026-01-01', ${SQL_NOW})`);
+        ctx.sqlWrite(`INSERT OR IGNORE INTO bookings (id, user_id, child_id, kind, term_id, status, amount_cents, created_at)
+                      VALUES ('${user}-b', '${user}', '${user}-c0', 'complimentary', '${term}', 'confirmed', 0, ${SQL_NOW})`);
+      }
+      const child = `${user}-c${cronRuns}`;
+      const entry = `${user}-w${cronRuns}`;
+      ctx.sqlWrite(`INSERT INTO children (id, user_id, name, dob, created_at) VALUES ('${child}', '${user}', 'Marker', '2026-01-01', ${SQL_NOW})`);
+      ctx.sqlWrite(`INSERT INTO waitlist (id, term_id, user_id, child_id, status, joined_at, offer_booking_id)
+                    VALUES ('${entry}', '${term}', '${user}', '${child}', 'offered', ${SQL_NOW}, '${user}-b')`);
       const res = await fetch(`${base}/__scheduled?cron=${encodeURIComponent('*/15 * * * *')}`);
       await res.text();
-      return res.status;
+      const until = Date.now() + 20000;
+      while (Date.now() < until) {
+        if (ctx.sql(`SELECT status FROM waitlist WHERE id = '${entry}'`)[0]?.status === 'booked') return res.status;
+        await new Promise((r) => setTimeout(r, 150));
+      }
+      throw new Error(`scheduled() run ${cronRuns} did not finish its jobs (HTTP ${res.status})`);
     },
 
     sydneyDate,

@@ -50,7 +50,13 @@ test('deleteSession revokes server-side: the old cookie value is dead', async ()
 });
 
 test('garbage session ids are rejected without a database round trip', async () => {
-  assert.equal(await getSession(env, ''), null);
-  assert.equal(await getSession(env, 'short'), null);
-  assert.equal(await getSession(env, null), null);
+  // A database that fails the test if it is touched at all.
+  const untouchable = { ...env, DB: { prepare() { throw new Error('getSession queried the database'); }, batch() { throw new Error('batch'); } } };
+  assert.equal(await getSession(untouchable, ''), null);
+  assert.equal(await getSession(untouchable, 'short'), null);
+  assert.equal(await getSession(untouchable, null), null);
+  assert.equal(await getSession(untouchable, 'x'.repeat(500)), null, 'absurdly long');
+  // …while a well-formed id does ask the database.
+  const { sessionId } = await createSession(env, 'u1');
+  await assert.rejects(getSession(untouchable, sessionId), /queried the database/);
 });

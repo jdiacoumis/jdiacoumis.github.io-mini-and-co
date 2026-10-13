@@ -63,8 +63,18 @@ export async function run(ctx) {
   const roster = await ctx.fetch('/admin/sessions/ses-11-w2/roster', { cookie: staff });
   ctx.check('staff can open a roster', roster.status === 200 && roster.text.includes('Otto') && roster.text.includes('Peanut allergy'));
   ctx.check('the staff roster has no admin links or export', !roster.text.includes('admin-nav') && !roster.text.includes('roster.csv'));
-  const attendance = await ctx.fetch('/admin/sessions/ses-11-w2/attendance', { method: 'POST', cookie: staff, body: { csrf: staffCsrf } });
-  ctx.check('staff may post attendance', attendance.status === 303);
+  const attendance = await ctx.fetch('/admin/sessions/ses-11-w2/attendance', {
+    method: 'POST', cookie: staff, body: { csrf: staffCsrf, booking: bookingId, mark: 'present' },
+  });
+  const [mark] = ctx.sql(`SELECT bs.attendance, u.email FROM booking_sessions bs LEFT JOIN users u ON u.id = bs.attendance_marked_by
+                          WHERE bs.booking_id = '${bookingId}' AND bs.session_id = 'ses-11-w2'`);
+  ctx.check('staff may mark attendance: the row says present, marked by the facilitator',
+    attendance.status === 303 && attendance.location.includes('ok=attendance-saved') && mark && mark.attendance === 'present'
+      && mark.email === STAFF, `${attendance.location} ${JSON.stringify(mark)}`);
+  await ctx.fetch('/admin/sessions/ses-11-w2/attendance', {
+    method: 'POST', cookie: staff, body: { csrf: staffCsrf, booking: bookingId, mark: 'clear' },
+  });
+  ctx.check('and clear it again', ctx.sql(`SELECT attendance FROM booking_sessions WHERE booking_id = '${bookingId}' AND session_id = 'ses-11-w2'`)[0].attendance === null);
   const attendanceNoCsrf = await ctx.fetch('/admin/sessions/ses-11-w2/attendance', { method: 'POST', cookie: staff, body: { csrf: 'x' } });
   ctx.check('attendance requires CSRF', attendanceNoCsrf.status === 403);
   ctx.check('a parent may not post attendance',
