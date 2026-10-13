@@ -62,9 +62,9 @@ function greeting(parentName) {
   return `Hi ${name || 'there'},`;
 }
 
+// Australian style (Style Manual): 's on every singular name — "James's".
 function possessive(name) {
-  const n = String(name || '').trim() || 'your little one';
-  return /s$/i.test(n) ? `${n}'` : `${n}'s`;
+  return `${String(name || '').trim() || 'your little one'}'s`;
 }
 
 function accountLink(accountUrl, label = 'Open my account') {
