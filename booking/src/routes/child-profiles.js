@@ -11,7 +11,7 @@
 import { html, pageResponse, csrfField, joinHtml } from '../lib/html.js';
 import { requireAuthOrRedirect, requireCsrf, parseForm } from '../lib/middleware.js';
 import { formatAge } from '../lib/time.js';
-import { isValidName, validateDob, cleanText, isYesNo } from '../lib/validate.js';
+import { isValidName, validateDob, cleanText, isYesNo, cleanName } from '../lib/validate.js';
 import { uuid, nowIso } from '../lib/db.js';
 import { redirect, notFound } from '../lib/http.js';
 import { safeNextPath } from '../lib/http.js';
@@ -62,7 +62,7 @@ function childForm({ action, values, error = '', csrfToken, submitLabel, next = 
 // echo what was typed (so a failed submission preserves the parent's input).
 function validateChildForm(form) {
   const values = {
-    name: String(form.get('name') || '').trim(),
+    name: cleanName(form.get('name'), 500),
     dob: String(form.get('dob') || '').trim(),
     medical: cleanText(form.get('medical'), MEDICAL_NOTES_MAX),
     photo_consent: ['yes', 'no'].includes(form.get('photo_consent')) ? form.get('photo_consent') : '',

@@ -12,7 +12,7 @@
 import { html, pageResponse, csrfField, joinHtml } from '../lib/html.js';
 import { requireAuthOrRedirect, requireCsrf, parseForm } from '../lib/middleware.js';
 import { redirect, notFound, badRequest, tooMany } from '../lib/http.js';
-import { isValidId, isValidName, isValidAuPhone, normalisePhone, cleanText } from '../lib/validate.js';
+import { isValidId, isValidName, isValidAuPhone, normalisePhone, cleanText, cleanName } from '../lib/validate.js';
 import { formatSydney, formatAge } from '../lib/time.js';
 import { nowIso, isoPlusSeconds } from '../lib/db.js';
 import {
@@ -488,7 +488,7 @@ export async function handleProfilePost(req, env) {
   requireCsrf(req, user, form);
 
   const values = {
-    name: cleanText(form.get('name'), 100),
+    name: cleanName(form.get('name'), 100),
     phone: normalisePhone(form.get('phone')),
   };
 

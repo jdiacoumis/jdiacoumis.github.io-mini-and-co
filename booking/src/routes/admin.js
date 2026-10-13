@@ -14,7 +14,7 @@ import { html, pageResponse, csrfField, joinHtml } from '../lib/html.js';
 import { requireAdmin, requireStaff, requireCsrf, parseForm } from '../lib/middleware.js';
 import { redirect, notFound } from '../lib/http.js';
 import { uuid, nowIso } from '../lib/db.js';
-import { isValidId, cleanText, parseIntInRange, parseDollarsToCents } from '../lib/validate.js';
+import { isValidId, cleanText, parseIntInRange, parseDollarsToCents, cleanName } from '../lib/validate.js';
 import { sydneyToUtc, formatSydney, sydneyFields, formatAge } from '../lib/time.js';
 import {
   listSessionsWithFullness, formatAud, sweepExpiredBookings, KIND_LABELS,
@@ -25,6 +25,7 @@ import { logEvent, logError } from '../lib/log.js';
 import {
   dashboardCounts, loadSession, sessionCancellationPlan, cancelSessionWithCredits, reinstateSession,
   loadRoster, strictestConsent, paymentSummary, listRosterSessions, syncTermDates, noticeFor, errorBlock,
+  centsToInput, optionalDollars,
 } from '../lib/admin-ops.js';
 
 const MAX_REPEAT_WEEKS = 52;
@@ -195,7 +196,7 @@ function classForm({ action, values, error = '', csrfToken, submitLabel, showAct
 
 function readClassForm(form) {
   const values = {
-    name: cleanText(form.get('name'), 100),
+    name: cleanName(form.get('name'), 100),
     description: cleanText(form.get('description'), 2000),
     venue: cleanText(form.get('venue'), 200),
     age_range: cleanText(form.get('age_range'), 100),
@@ -614,33 +615,49 @@ export async function handleAdminSessionCancel(req, env, params) {
   return cancelSessionPage(user, session, plan, { now });
 }
 
-function cancelSessionPage(user, session, plan, { now, error = '', reason = '', status = 200 }) {
-  const rows = plan.map((r) => html`
-    <tr>
-      <td>${r.child_name}</td>
-      <td>${r.parent_name || r.parent_email}</td>
-      <td>${KIND_LABELS[r.kind] || r.kind}${r.status === 'pending' ? ' (not paid yet)' : ''}</td>
-      <td>${r.creditCents ? formatAud(r.creditCents) : 'No credit'}</td>
-    </tr>`);
+// The credit for each paid family is filled in with the per-week value of
+// its booking and can be changed (0 for none) — e.g. for a family imported
+// from ClassForKids (review finding 9). Unpaid places get their price
+// reduced instead (finding 8).
+function cancelSessionPage(user, session, plan, { now, error = '', reason = '', status = 200, credits = {} }) {
+  const rows = plan.map((r) => {
+    let money = html`No credit`;
+    if (r.status === 'confirmed' && r.kind !== 'complimentary') {
+      const value = Object.hasOwn(credits, r.booking_id) ? credits[r.booking_id] : centsToInput(r.creditCents);
+      money = html`<label class="sr-only" for="credit-${r.booking_id}">Credit for ${r.child_name} (AUD)</label>
+        $<input type="text" id="credit-${r.booking_id}" name="credit_${r.booking_id}" value="${value}" size="7" inputmode="decimal">`;
+    } else if (r.reductionCents > 0) {
+      money = html`Price reduced by ${formatAud(r.reductionCents)}`;
+    }
+    return html`
+      <tr>
+        <td>${r.child_name}</td>
+        <td>${r.parent_name || r.parent_email}</td>
+        <td>${KIND_LABELS[r.kind] || r.kind}${r.status === 'pending' ? ' (not paid yet)' : ''}</td>
+        <td>${money}</td>
+      </tr>`;
+  });
   const totalCredit = plan.reduce((sum, r) => sum + r.creditCents, 0);
+  const totalReduced = plan.reduce((sum, r) => sum + r.reductionCents, 0);
   const body = html`
     <h1>Cancel this session?</h1>
     <p class="lede">${session.class_name} · ${formatSydney(session.starts_at)}${session.term_name ? ` · ${session.term_name}` : ''}</p>
     ${errorBlock(error)}
     ${session.starts_at <= now ? html`<p class="form-error">This session has already started.</p>` : ''}
-    ${rows.length ? html`
-      <p>${plan.length} ${plan.length === 1 ? 'family is' : 'families are'} booked. Each paid booking gets a credit for this
-        class (the per-week value of their booking), applied automatically to their next booking — ${formatAud(totalCredit)} in total.
-        Every family is emailed.</p>
-      <div class="table-scroll">
-        <table class="booking-table">
-          <thead><tr><th>Child</th><th>Parent</th><th>Booking</th><th>Credit</th></tr></thead>
-          <tbody>${joinHtml(rows)}</tbody>
-        </table>
-      </div>
-    ` : html`<p>Nobody is booked into this session.</p>`}
     <form method="post" action="/admin/sessions/${session.id}/cancel" class="booking-form confirm-box">
       ${csrfField(user.csrfToken)}
+      ${rows.length ? html`
+        <p>${plan.length} ${plan.length === 1 ? 'family is' : 'families are'} booked. Each paid booking gets a credit for this
+          class — the per-week value of their booking, which you can change below (0 for none) — applied automatically to
+          their next booking: ${formatAud(totalCredit)} in total.${totalReduced ? ` Places not paid for yet cost one week less instead (${formatAud(totalReduced)} in total).` : ''}
+          Every family is emailed.</p>
+        <div class="table-scroll">
+          <table class="booking-table">
+            <thead><tr><th>Child</th><th>Parent</th><th>Booking</th><th>Credit</th></tr></thead>
+            <tbody>${joinHtml(rows)}</tbody>
+          </table>
+        </div>
+      ` : html`<p>Nobody is booked into this session.</p>`}
       <div class="form-group">
         <label for="reason">Reason (shown to families)</label>
         <input type="text" id="reason" name="reason" value="${reason}" required maxlength="200" placeholder="Venue closed">
@@ -663,39 +680,60 @@ export async function handleAdminSessionCancelPost(req, env, params) {
   requireCsrf(req, user, form);
 
   const reason = cleanText(form.get('reason'), 200);
-  if (!reason) {
+  // The owner's credit for each paid family (blank or missing = the
+  // per-week value; 0 = none).
+  const credits = {};
+  const creditOverrides = {};
+  let badCredit = false;
+  for (const [name, value] of form.entries()) {
+    const m = /^credit_([A-Za-z0-9-]{1,64})$/.exec(name);
+    if (!m) continue;
+    credits[m[1]] = String(value).trim().slice(0, 12);
+    const parsed = optionalDollars(credits[m[1]], 100000);
+    if (!parsed.ok) badCredit = true;
+    else if (parsed.cents !== null) creditOverrides[m[1]] = parsed.cents;
+  }
+  if (!reason || badCredit) {
     const plan = await sessionCancellationPlan(env, session.id, now);
-    return cancelSessionPage(user, session, plan, { now, error: 'Please give a reason — families see it in their email.', status: 400 });
+    const error = !reason ? 'Please give a reason — families see it in their email.' : 'Each credit must be an amount like 28, or 0 for none.';
+    return cancelSessionPage(user, session, plan, { now, error, reason, credits, status: 400 });
   }
   if (session.status !== 'scheduled') return redirect(`/admin/sessions/${session.id}/edit`, 303);
 
-  const result = await cancelSessionWithCredits(env, session.id, { reason, by: user.userId, now });
+  const result = await cancelSessionWithCredits(env, session.id, { reason, by: user.userId, now, creditOverrides });
   if (!result.ok) {
     if (result.error === 'not_scheduled') return redirect(`/admin/sessions/${session.id}/edit`, 303);
     const plan = await sessionCancellationPlan(env, session.id, now);
     return cancelSessionPage(user, session, plan, {
-      now, reason, error: 'Bookings kept changing while cancelling — please try again.', status: 409,
+      now, reason, credits, error: 'Bookings kept changing while cancelling — please try again.', status: 409,
     });
   }
 
   let notified = true;
   try {
-    await notifySessionCancelled(env, session.id, { reason });
+    await notifySessionCancelled(env, session.id, { reason, priceReductions: result.reductions });
   } catch (err) {
     notified = false;
     logError('session_cancel_notice_failed', err, { session_id: session.id.slice(0, 8) });
   }
 
-  const rows = result.affected.map((r) => html`
-    <tr>
-      <td><a href="/admin/bookings/${r.booking_id}">${r.child_name}</a></td>
-      <td>${r.parent_name || r.parent_email}</td>
-      <td>${r.creditCents ? `${formatAud(r.creditCents)} credit` : 'No credit (nothing paid)'}</td>
-    </tr>`);
+  const rows = result.affected.map((r) => {
+    let money = 'No credit';
+    if (r.creditCents) money = `${formatAud(r.creditCents)} credit`;
+    else if (r.reductionCents) money = `Price reduced by ${formatAud(r.reductionCents)} (not paid yet)`;
+    else if (r.status === 'pending' || r.kind === 'complimentary') money = 'No credit (nothing paid)';
+    return html`
+      <tr>
+        <td><a href="/admin/bookings/${r.booking_id}">${r.child_name}</a></td>
+        <td>${r.parent_name || r.parent_email}</td>
+        <td>${money}</td>
+      </tr>`;
+  });
   const body = html`
     <h1>Session cancelled</h1>
     <p class="form-notice" role="status">${session.class_name}, ${formatSydney(session.starts_at)} is cancelled.
-      ${result.creditsIssued} credit${result.creditsIssued === 1 ? '' : 's'} issued (${formatAud(result.creditCents)}).</p>
+      ${result.creditsIssued} credit${result.creditsIssued === 1 ? '' : 's'} issued (${formatAud(result.creditCents)}).${
+  result.reducedCents ? ` Unpaid places reduced by ${formatAud(result.reducedCents)} in total.` : ''}</p>
     ${notified ? '' : html`<p class="form-error">The emails to families could not be sent — please contact them directly.</p>`}
     ${rows.length ? html`
       <table class="booking-table">

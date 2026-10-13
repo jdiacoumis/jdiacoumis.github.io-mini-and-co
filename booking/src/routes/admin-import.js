@@ -10,13 +10,20 @@
 // externally paid term booking covering the term's remaining sessions: it
 // occupies capacity but never triggers payment, a confirmation email, or a
 // Purchase conversion event. Blank enrolment columns import the family only.
+// What the family paid on ClassForKids (amount_paid, AUD; blank = the term
+// price pro-rated to the weeks enrolled) is the booking's price and an
+// offline ledger row "paid on ClassForKids", so a cancelled class credits
+// them its per-week value like any paid family (review finding 9).
 
 import { html, pageResponse, csrfField, joinHtml } from '../lib/html.js';
 import { requireAdmin, requireCsrf, parseForm } from '../lib/middleware.js';
 import { badRequest } from '../lib/http.js';
 import { uuid, nowIso } from '../lib/db.js';
-import { normaliseEmail, isValidEmail, normalisePhone, cleanText, validateDob } from '../lib/validate.js';
+import { normaliseEmail, isValidEmail, normalisePhone, cleanText, validateDob, cleanName } from '../lib/validate.js';
 import { parseCsv, csvResponse } from '../lib/csv.js';
+import { proRata } from '../lib/pricing.js';
+import { formatAud } from '../lib/domain.js';
+import { paymentInsertStatement, recomputeStatement } from '../lib/ledger.js';
 import { sendMagicLinkEmail } from './auth.js';
 import { allowRate } from '../lib/ratelimit.js';
 import { logEvent, logError, maskEmail } from '../lib/log.js';
@@ -24,7 +31,16 @@ import { logEvent, logError, maskEmail } from '../lib/log.js';
 const MAX_CSV_BYTES = 256 * 1024;
 const MAX_ROWS = 500;
 const REQUIRED_COLUMNS = ['parent_name', 'parent_email', 'parent_phone', 'child_name', 'child_dob', 'medical_notes', 'photo_consent'];
-const OPTIONAL_COLUMNS = ['enrol_class', 'enrol_term'];
+const OPTIONAL_COLUMNS = ['enrol_class', 'enrol_term', 'amount_paid'];
+
+// "168", "$168.00", "140.5" → cents; '' → null; anything else → NaN.
+function parseAmountPaid(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  const m = /^\$?\s*(\d{1,5})(?:\.(\d{1,2}))?$/.exec(text);
+  if (!m) return Number.NaN;
+  return (+m[1]) * 100 + (m[2] ? +m[2].padEnd(2, '0') : 0);
+}
 
 function parseConsent(value) {
   const v = String(value || '').trim().toLowerCase();
@@ -55,7 +71,11 @@ async function analyseCsv(env, text) {
   const now = nowIso();
   const classes = (await env.DB.prepare(`SELECT id, name FROM classes`).all()).results || [];
   const classByName = new Map(classes.map((c) => [c.name.trim().toLowerCase(), c.id]));
-  const terms = (await env.DB.prepare(`SELECT id, class_id, name FROM terms`).all()).results || [];
+  const terms = (await env.DB.prepare(
+    `SELECT t.id, t.class_id, t.name, t.term_price_cents,
+            (SELECT COUNT(*) FROM class_sessions s WHERE s.term_id = t.id AND s.status = 'scheduled') AS total_scheduled
+     FROM terms t`,
+  ).all()).results || [];
   const termByClassName = new Map(terms.map((t) => [`${t.class_id}|${t.name.trim().toLowerCase()}`, t]));
   const sessions = (await env.DB.prepare(
     `SELECT id, term_id FROM class_sessions WHERE status = 'scheduled' AND term_id IS NOT NULL AND starts_at > ?1
@@ -71,15 +91,16 @@ async function analyseCsv(env, text) {
   for (let i = 1; i < parsed.length; i += 1) {
     const r = parsed[i];
     const values = {
-      parent_name: cleanText(col(r, 'parent_name'), 100),
+      parent_name: cleanName(col(r, 'parent_name'), 100),
       parent_email: normaliseEmail(col(r, 'parent_email')),
       parent_phone: normalisePhone(col(r, 'parent_phone')),
-      child_name: cleanText(col(r, 'child_name'), 100),
+      child_name: cleanName(col(r, 'child_name'), 100),
       child_dob: col(r, 'child_dob'),
       medical_notes: cleanText(col(r, 'medical_notes'), 2000),
       photo_consent: col(r, 'photo_consent'),
       enrol_class: col(r, 'enrol_class'),
       enrol_term: col(r, 'enrol_term'),
+      amount_paid: col(r, 'amount_paid'),
     };
     const line = i + 1; // 1-based, counting the header as line 1
 
@@ -102,9 +123,21 @@ async function analyseCsv(env, text) {
         reason = `no term "${values.enrol_term}" for class "${values.enrol_class}"`;
       } else if (!(remainingByTerm.get(term.id) || []).length) {
         reason = `term "${values.enrol_term}" has no sessions left`;
+      } else if (Number.isNaN(parseAmountPaid(values.amount_paid))) {
+        reason = `amount_paid "${values.amount_paid}" is not an amount in dollars (e.g. 168 or 140.50)`;
       } else {
-        enrolment = { classId, termId: term.id, termName: term.name, sessionIds: remainingByTerm.get(term.id) };
+        const sessionIds = remainingByTerm.get(term.id);
+        const given = parseAmountPaid(values.amount_paid);
+        enrolment = {
+          classId, termId: term.id, termName: term.name, sessionIds,
+          // What they paid ClassForKids; blank = the term price for the
+          // weeks enrolled.
+          amountCents: given ?? proRata(term.term_price_cents, sessionIds.length, term.total_scheduled),
+          amountGiven: given !== null,
+        };
       }
+    } else if (values.amount_paid) {
+      reason = 'amount_paid is only for a row with an enrolment (enrol_class and enrol_term)';
     }
 
     rows.push({ line, values: { ...values, photo_consent: consent ?? values.photo_consent }, valid: !reason, reason, enrolment });
@@ -165,8 +198,8 @@ export async function handleImportTemplate(req, env) {
   return csvResponse('migration-template.csv',
     [...REQUIRED_COLUMNS, ...OPTIONAL_COLUMNS],
     [
-      ['Jane Citizen', 'jane@example.com', '0412345678', 'Ava', '2025-10-01', 'Mild eczema', 'yes', 'Sensory Play — Wednesday 11:00 am', 'Term 1 2027'],
-      ['Sam Smith', 'sam@example.com', '0412000000', 'Leo', '2025-12-01', '', 'no', '', ''],
+      ['Jane Citizen', 'jane@example.com', '0412345678', 'Ava', '2025-10-01', 'Mild eczema', 'yes', 'Sensory Play — Wednesday 11:00 am', 'Term 1 2027', '168'],
+      ['Sam Smith', 'sam@example.com', '0412000000', 'Leo', '2025-12-01', '', 'no', '', '', ''],
     ]);
 }
 
@@ -176,7 +209,7 @@ function previewTable(rows, statuses) {
       <td>${row.line}</td>
       <td>${row.values.parent_email}</td>
       <td>${row.values.child_name}</td>
-      <td>${row.enrolment ? `${row.enrolment.termName} (${row.enrolment.sessionIds.length} session(s))` : '—'}</td>
+      <td>${row.enrolment ? `${row.enrolment.termName} (${row.enrolment.sessionIds.length} session(s)) · paid ${formatAud(row.enrolment.amountCents)}${row.enrolment.amountGiven ? '' : ' (term price for those weeks)'}` : '—'}</td>
       <td>${row.valid ? (statuses ? statuses[i] : 'OK') : html`Invalid — ${row.reason}`}</td>
     </tr>
   `);
@@ -268,18 +301,23 @@ async function importRow(env, row) {
       enrolNote = ', enrolment already exists';
     } else {
       // Confirmed, externally paid term booking (paid on the old system):
-      // nothing owing, no payment flow, no conversion event. Weeks the child
-      // already holds are left out. Consent/medical snapshots come from the
-      // import; the waiver is accepted (versioned) on their next booking.
+      // nothing owing, no payment flow, no conversion event. Its price is
+      // what they paid there, recorded as an offline ledger row — so the
+      // per-week credit for a cancelled class is right (finding 9). Weeks
+      // the child already holds are left out. Consent/medical snapshots come
+      // from the import; the waiver is accepted (versioned) on their next
+      // booking.
       const bookingId = uuid();
+      const amountCents = row.enrolment.amountCents;
       await env.DB.batch([
         env.DB.prepare(
           `INSERT INTO bookings (id, user_id, child_id, kind, term_id, status, list_amount_cents, amount_cents,
                                  currency, payment_method, payment_status, payment_provider,
                                  photo_consent_snapshot, medical_notes_snapshot, admin_notes, created_at)
-           VALUES (?1, ?2, ?3, 'term', ?4, 'confirmed', 0, 0, 'AUD', 'none', 'paid', 'external', ?5, ?6,
+           VALUES (?1, ?2, ?3, 'term', ?4, 'confirmed', ?8, ?8, 'AUD', ?9, 'paid', 'external', ?5, ?6,
                    'Imported from ClassForKids', ?7)`,
-        ).bind(bookingId, parent.id, child.id, termId, v.photo_consent === 'yes' ? 1 : 0, v.medical_notes, now),
+        ).bind(bookingId, parent.id, child.id, termId, v.photo_consent === 'yes' ? 1 : 0, v.medical_notes, now,
+          amountCents, amountCents > 0 ? 'offline' : 'none'),
         ...sessionIds.map((sid) => env.DB.prepare(
           `INSERT INTO booking_sessions (booking_id, session_id, status)
            SELECT ?1, ?2, 'booked'
@@ -287,6 +325,11 @@ async function importRow(env, row) {
                              WHERE bs.session_id = ?2 AND b.child_id = ?3 AND b.status = 'confirmed'
                                AND bs.status = 'booked')`,
         ).bind(bookingId, sid, child.id)),
+        ...(amountCents > 0 ? [paymentInsertStatement(env, {
+          bookingId, kind: 'offline', amountCents, provider: 'external', providerRef: `import:${bookingId}`,
+          method: 'ClassForKids', note: 'Paid on ClassForKids (imported)', now,
+        })] : []),
+        recomputeStatement(env, bookingId),
       ]);
       enrolNote = `, enrolled in ${row.enrolment.termName}`;
     }

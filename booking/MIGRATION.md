@@ -46,6 +46,7 @@ Columns (header row required, one row per child):
 | `photo_consent` | yes | `yes`/`no` (`y`, `n`, `true`, `false`, `1`, `0` accepted) |
 | `enrol_class` | no | the class's exact name as in `/admin/classes`, e.g. `Sensory Play — Wednesday 11:00 am` |
 | `enrol_term` | with `enrol_class` | that class's term name, e.g. `Term 4 2026` |
+| `amount_paid` | no (only with an enrolment) | what the family paid ClassForKids for that term, in dollars (`168`, `140.50`). Blank = the term's price for the weeks they are enrolled in (pro-rated) |
 
 Two children of one parent = two rows with the same `parent_email`.
 
@@ -74,9 +75,14 @@ imports the valid rows and skips invalid ones, reporting each skipped row.
 - the child profile (or matches by parent + child name),
 - for a row with `enrol_class`/`enrol_term`: a **confirmed, externally paid
   term booking** (`payment_provider=external`, nothing owing) holding a seat
-  in every remaining class of that term. No payment is requested, no
-  confirmation email is sent and no conversion event is fired. Re-importing
-  the same file never enrols a child twice.
+  in every remaining class of that term. Its price is `amount_paid` (or the
+  term price for those weeks), recorded in the booking's payments as an
+  offline payment "Paid on ClassForKids" — so if you cancel one of those
+  classes, the family is credited a week's worth of what they paid, like
+  everyone else. (The cancel page also lets you change any family's credit
+  before you confirm, e.g. if the amount on ClassForKids was a special deal.)
+  No payment is requested, no confirmation email is sent and no conversion
+  event is fired. Re-importing the same file never enrols a child twice.
 
 Re-committing the same file (or a corrected version including already-imported
 rows) reports those rows as already existing and changes nothing — safe to

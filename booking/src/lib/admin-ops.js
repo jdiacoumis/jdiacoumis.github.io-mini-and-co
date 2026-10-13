@@ -545,14 +545,20 @@ export async function loadSession(env, sessionId, now = nowIso()) {
   ).bind(sessionId, now).first();
 }
 
-// Families holding a seat in a session, with what cancelling it would credit
-// them: confirmed bookings get the per-week value of their booking (term
-// weeks and casual/trial classes alike — for one class that is what they
-// paid); pending holds and complimentary places get none.
+// Families holding a seat in a session, with what cancelling it would do
+// for each (D8; review findings 8 and 9):
+//   creditCents     a confirmed booking's per-week value as account credit
+//                   (term weeks and casual/trial classes alike — for one
+//                   class that is what they paid; imported ClassForKids
+//                   bookings carry what they paid there, MIGRATION.md);
+//   reductionCents  an unpaid hold (pending: pay-later, an offer, a
+//                   re-enrolment, or a checkout under way) costs that much
+//                   less instead — Pay now then charges the right amount;
+//   complimentary places get neither.
 export async function sessionCancellationPlan(env, sessionId, now = nowIso()) {
   const rows = (await env.DB.prepare(
     `SELECT b.id AS booking_id, b.user_id, b.child_id, b.kind, b.status, b.amount_cents, b.credit_cents,
-            u.name AS parent_name, u.email AS parent_email, ch.name AS child_name,
+            b.list_amount_cents, u.name AS parent_name, u.email AS parent_email, ch.name AS child_name,
             (SELECT COUNT(*) FROM booking_sessions w WHERE w.booking_id = b.id AND w.status != 'transferred_out') AS weeks
      FROM booking_sessions bs
      JOIN bookings b ON b.id = bs.booking_id
@@ -561,62 +567,87 @@ export async function sessionCancellationPlan(env, sessionId, now = nowIso()) {
      WHERE bs.session_id = ?1 AND ${holdsSeatSql('bs', 'b', '?2')}
      ORDER BY ch.name COLLATE NOCASE`,
   ).bind(sessionId, now).all()).results || [];
-  return rows.map((r) => ({
-    ...r,
-    creditCents: r.status === 'confirmed' && r.kind !== 'complimentary'
-      ? perWeekCreditCents({ amountCents: r.amount_cents, creditCents: r.credit_cents, weeks: r.weeks })
-      : 0,
-  }));
+  return rows.map((r) => {
+    const perWeek = r.kind === 'complimentary' ? 0
+      : perWeekCreditCents({ amountCents: r.amount_cents, creditCents: r.credit_cents, weeks: r.weeks });
+    return {
+      ...r,
+      creditCents: r.status === 'confirmed' ? perWeek : 0,
+      reductionCents: r.status === 'pending' ? Math.min(perWeek, r.amount_cents, r.list_amount_cents) : 0,
+    };
+  });
 }
 
-// Cancel a session (owner action, D8): in ONE batch the session is marked
-// cancelled with the reason, every seat-holding row in it becomes
-// 'cancelled', and each confirmed family gets its credit (source = the
-// booking and the session). Guards roll everything back if the session or a
-// row changed since it was read; the caller retries. The family notices are
-// sent afterwards by notifySessionCancelled (routes/admin.js).
-// Returns { ok, affected: [...plan rows], creditsIssued, creditCents } or
+// Cancel a session (owner action, D8) in ONE batch with a fixed number of
+// statements however many families are booked (Cloudflare caps the D1
+// queries a request may make — review, D1 limits): the session is marked
+// cancelled with the reason; every seat-holding row in it becomes
+// 'cancelled'; each confirmed family gets its credit (source = the booking
+// and the session); each unpaid hold costs its per-week value less (list
+// and amount, with a note on the booking — review finding 8). Families and
+// amounts travel as JSON (json_each). Guards roll everything back if the
+// session or a seat changed since the plan was read; the caller retries.
+//   creditOverrides: { [bookingId]: cents } — the owner's own credit for a
+//   family (the cancel page; 0 for none), e.g. for an imported booking.
+// The family notices are sent afterwards by notifySessionCancelled.
+// Returns { ok, affected: [...plan rows, with the credit given], creditsIssued,
+// creditCents, reductions: { [bookingId]: cents }, reducedCents } or
 // { ok: false, error: not_found | not_scheduled | busy }.
-export async function cancelSessionWithCredits(env, sessionId, { reason, by, now = nowIso() }) {
+export async function cancelSessionWithCredits(env, sessionId, { reason, by, now = nowIso(), creditOverrides = {} }) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const session = await loadSession(env, sessionId, now);
     if (!session) return { ok: false, error: 'not_found' };
     if (session.status !== 'scheduled') return { ok: false, error: 'not_scheduled' };
-    const plan = await sessionCancellationPlan(env, sessionId, now);
+    const plan = (await sessionCancellationPlan(env, sessionId, now)).map((row) => {
+      const override = Object.hasOwn(creditOverrides, row.booking_id) ? creditOverrides[row.booking_id] : null;
+      const creditCents = row.status === 'confirmed' && Number.isInteger(override) && override >= 0 ? override : row.creditCents;
+      return { ...row, creditCents };
+    });
     const when = formatSydney(session.starts_at, 'date');
     const creditReason = `Class cancelled — ${session.class_name}, ${when}${reason ? ` (${reason})` : ''}`.slice(0, 300);
+    const holders = JSON.stringify(plan.map((r) => ({ b: r.booking_id, s: r.status })));
+    const credits = JSON.stringify(plan.filter((r) => r.creditCents > 0)
+      .map((r) => ({ id: uuid(), b: r.booking_id, u: r.user_id, c: r.child_id, a: r.creditCents })));
+    const reduced = plan.filter((r) => r.reductionCents > 0);
+    const reductions = JSON.stringify(reduced.map((r) => ({ b: r.booking_id, a: r.reductionCents })));
+    const note = `${formatSydney(now, 'date')}: ${session.class_name} on ${when} was cancelled — the price of this unpaid place was reduced by one week's value`;
     const statements = [
       ...txnGuard(env, `(SELECT status FROM class_sessions WHERE id = ?1) = 'scheduled'`, [sessionId], 'session'),
-      // Nobody may have taken a seat since the plan was read (they would
-      // keep a place in a cancelled class with no credit): re-read instead.
+      // Exactly the planned families hold seats, in the planned states:
+      // nobody joined (they would keep a place in a cancelled class with no
+      // credit) and nobody paid or left since the plan was read.
       ...txnGuard(env,
         `(SELECT COUNT(*) FROM booking_sessions cbs JOIN bookings cb ON cb.id = cbs.booking_id
-          WHERE cbs.session_id = ?1 AND ${holdsSeatSql('cbs', 'cb', '?2')}) = ?3`,
-        [sessionId, now, plan.length], 'newcomer'),
+          WHERE cbs.session_id = ?1 AND ${holdsSeatSql('cbs', 'cb', '?2')}) = ?3
+         AND (SELECT COUNT(*) FROM json_each(?4) p
+              JOIN booking_sessions pbs ON pbs.booking_id = json_extract(p.value, '$.b') AND pbs.session_id = ?1
+              JOIN bookings pb ON pb.id = pbs.booking_id
+              WHERE ${holdsSeatSql('pbs', 'pb', '?2')} AND pb.status = json_extract(p.value, '$.s')) = ?3`,
+        [sessionId, now, plan.length, holders], 'holders'),
       env.DB.prepare(
         `UPDATE class_sessions SET status = 'cancelled', cancelled_reason = ?2, cancelled_at = ?3
          WHERE id = ?1 AND status = 'scheduled'`,
       ).bind(sessionId, String(reason || '').slice(0, 500), now),
+      env.DB.prepare(
+        `UPDATE booking_sessions SET status = 'cancelled', changed_at = ?3
+         WHERE session_id = ?1 AND status = 'booked'
+           AND booking_id IN (SELECT json_extract(value, '$.b') FROM json_each(?2))`,
+      ).bind(sessionId, holders, now),
+      env.DB.prepare(
+        `INSERT INTO credits (id, user_id, child_id, amount_cents, remaining_cents, reason,
+                              source_booking_id, source_session_id, issued_by, issued_at, expires_at)
+         SELECT json_extract(value, '$.id'), json_extract(value, '$.u'), json_extract(value, '$.c'),
+                json_extract(value, '$.a'), json_extract(value, '$.a'), ?2, json_extract(value, '$.b'), ?3, ?4, ?5, NULL
+         FROM json_each(?1)`,
+      ).bind(credits, creditReason, sessionId, String(by || 'system'), now),
+      env.DB.prepare(
+        `UPDATE bookings
+         SET amount_cents = amount_cents - (SELECT json_extract(value, '$.a') FROM json_each(?1) WHERE json_extract(value, '$.b') = bookings.id),
+             list_amount_cents = list_amount_cents - (SELECT json_extract(value, '$.a') FROM json_each(?1) WHERE json_extract(value, '$.b') = bookings.id),
+             admin_notes = CASE WHEN admin_notes = '' THEN ?2 ELSE admin_notes || char(10) || ?2 END
+         WHERE id IN (SELECT json_extract(value, '$.b') FROM json_each(?1)) AND status = 'pending'`,
+      ).bind(reductions, `${note}.`),
     ];
-    for (const row of plan) {
-      statements.push(
-        ...txnGuard(env,
-          `EXISTS (SELECT 1 FROM booking_sessions gbs JOIN bookings gb ON gb.id = gbs.booking_id
-                   WHERE gbs.booking_id = ?1 AND gbs.session_id = ?2 AND ${holdsSeatSql('gbs', 'gb', '?3')}
-                     AND gb.status = ?4)`,
-          [row.booking_id, sessionId, now, row.status], 'row'),
-        env.DB.prepare(
-          `UPDATE booking_sessions SET status = 'cancelled', changed_at = ?3
-           WHERE booking_id = ?1 AND session_id = ?2 AND status = 'booked'`,
-        ).bind(row.booking_id, sessionId, now),
-      );
-      if (row.creditCents > 0) {
-        statements.push(issueCreditStatement(env, {
-          userId: row.user_id, childId: row.child_id, amountCents: row.creditCents, reason: creditReason,
-          sourceBookingId: row.booking_id, sourceSessionId: sessionId, issuedBy: by, now,
-        }).statement);
-      }
-    }
     try {
       await env.DB.batch(statements);
     } catch (err) {
@@ -625,7 +656,7 @@ export async function cancelSessionWithCredits(env, sessionId, { reason, by, now
     }
     const credited = plan.filter((r) => r.creditCents > 0);
     logEvent('session_cancelled', {
-      session_id: sessionId.slice(0, 8), families: plan.length, credits: credited.length,
+      session_id: sessionId.slice(0, 8), families: plan.length, credits: credited.length, reduced: reduced.length,
       by: String(by || '').slice(0, 8),
     });
     return {
@@ -633,6 +664,8 @@ export async function cancelSessionWithCredits(env, sessionId, { reason, by, now
       affected: plan,
       creditsIssued: credited.length,
       creditCents: credited.reduce((sum, r) => sum + r.creditCents, 0),
+      reductions: Object.fromEntries(reduced.map((r) => [r.booking_id, r.reductionCents])),
+      reducedCents: reduced.reduce((sum, r) => sum + r.reductionCents, 0),
     };
   }
   return { ok: false, error: 'busy' };

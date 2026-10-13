@@ -150,7 +150,7 @@ export async function sessionCancelledRecipients(env, session, now = nowIso()) {
     : null;
   const rows = await env.DB.prepare(
     `SELECT b.id AS booking_id, b.user_id, b.child_id, b.term_id, b.kind, b.status AS booking_status,
-            bs.status AS row_status, u.email, u.name AS parent_name, ch.name AS child_name,
+            b.amount_cents, bs.status AS row_status, u.email, u.name AS parent_name, ch.name AS child_name,
             (SELECT COALESCE(SUM(cr.amount_cents), 0) FROM credits cr
              WHERE cr.source_session_id = ?1 AND cr.user_id = b.user_id AND cr.voided_at IS NULL
                AND (cr.source_booking_id = b.id OR cr.child_id = b.child_id)) AS credit_cents
@@ -170,11 +170,13 @@ export async function sessionCancelledRecipients(env, session, now = nowIso()) {
 
 // The owner cancelled a session. Call AFTER the session row is
 // status = 'cancelled' and the credits are issued (Phase 2B's route does both
-// in one batch). Emails each affected family once, with their credit, then
-// sends the owner a summary. Safe to call again: nobody is emailed twice.
+// in one batch). Emails each affected family once, with their credit — or,
+// for an unpaid place, the price reduction (`priceReductions`: { [bookingId]:
+// cents } from cancelSessionWithCredits) — then sends the owner a summary.
+// Safe to call again: nobody is emailed twice.
 // Returns { families, sent, skipped, failed, creditCents }, plus
 // error: 'not_found' | 'not_cancelled' when nothing was sent.
-export async function notifySessionCancelled(env, sessionId, { reason = '' } = {}) {
+export async function notifySessionCancelled(env, sessionId, { reason = '', priceReductions = {} } = {}) {
   const empty = { families: 0, sent: 0, skipped: 0, failed: 0, creditCents: 0 };
   const session = await env.DB.prepare(
     `SELECT cs.id, cs.starts_at, cs.status, cs.cancelled_at, cs.cancelled_reason, cs.term_id,
@@ -194,9 +196,11 @@ export async function notifySessionCancelled(env, sessionId, { reason = '' } = {
   const families = await sessionCancelledRecipients(env, session);
   const results = [];
   for (const f of families) {
+    const reduced = Object.hasOwn(priceReductions, f.booking_id) ? priceReductions[f.booking_id] : 0;
     const message = sessionCancelled({
       parentName: f.parent_name, childName: f.child_name, className: session.class_name,
       startsAt: session.starts_at, reason: why, creditCents: f.credit_cents, accountUrl,
+      priceReducedCents: reduced, amountNowCents: reduced > 0 ? f.amount_cents : null,
     });
     results.push(await sendTemplate(env, {
       template: 'session_cancelled', to: f.email, userId: f.user_id, bookingId: f.booking_id, sessionId,
@@ -217,10 +221,13 @@ export async function notifySessionCancelled(env, sessionId, { reason = '' } = {
     creditCents > 0
       ? `Credits given: ${formatAud(creditCents)} in total, used automatically on their next booking.`
       : 'No credits were given for this class.',
+    Object.keys(priceReductions).length
+      ? `Places not paid for yet now cost less: ${formatAud(Object.values(priceReductions).reduce((sum, c) => sum + c, 0))} taken off in total (${Object.keys(priceReductions).length} ${Object.keys(priceReductions).length === 1 ? 'family' : 'families'}).`
+      : '',
     `Roster: ${env.PUBLIC_BASE_URL}/admin/sessions/${sessionId}/roster`,
   ];
   await notifyOwner(env, `Class cancelled — ${session.class_name}, ${formatSydney(session.starts_at, 'date')}`,
-    summary.join('\n\n'),
+    summary.filter(Boolean).join('\n\n'),
     { dedupeKey: `session_cancelled:${sessionId}`, sessionId, termId: session.term_id, template: 'owner_session_cancelled' });
 
   return { families: families.length, sent, skipped, failed, creditCents };

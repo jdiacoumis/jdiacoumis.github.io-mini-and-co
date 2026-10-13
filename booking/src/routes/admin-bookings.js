@@ -20,7 +20,7 @@ import { uuid, nowIso, isConstraintError } from '../lib/db.js';
 import { formatSydney, formatAge, sydneyToUtc } from '../lib/time.js';
 import {
   isValidId, cleanText, parseDollarsToCents, normaliseEmail, isValidEmail, normalisePhone, isValidAuPhone,
-  isValidName, validateDob, isYesNo,
+  isValidName, validateDob, isYesNo, cleanName,
 } from '../lib/validate.js';
 import {
   effectiveStatus, formatAud, confirmBooking, cancelBooking, getBooking, KIND_LABELS, PAYMENT_STATUS_LABELS,
@@ -952,7 +952,7 @@ function childForm({ action, values, csrfToken, submitLabel }) {
 
 function readChildForm(form) {
   const values = {
-    name: cleanText(form.get('name'), 100),
+    name: cleanName(form.get('name'), 100),
     dob: String(form.get('dob') || '').trim().slice(0, 10),
     medical: cleanText(form.get('medical'), 2000),
     photo_consent: isYesNo(form.get('photo_consent')) ? form.get('photo_consent') : '',
@@ -1123,7 +1123,7 @@ export async function handleAdminCustomerEdit(req, env, params) {
   const parent = await env.DB.prepare(`SELECT id, email FROM users WHERE id = ?1`).bind(params.id).first();
   if (!parent) throw notFound();
   const values = {
-    name: cleanText(form.get('name'), 100),
+    name: cleanName(form.get('name'), 100),
     email: normaliseEmail(form.get('email')).slice(0, 254),
     phone: normalisePhone(form.get('phone')).slice(0, 20),
   };

@@ -21,7 +21,7 @@ import { redirect, notFound } from '../lib/http.js';
 import { uuid, nowIso, isoFromMs, isConstraintError } from '../lib/db.js';
 import {
   isValidId, cleanText, normaliseEmail, isValidEmail, normalisePhone, isValidAuPhone, validateDob,
-  parseDollarsToCents,
+  parseDollarsToCents, cleanName,
 } from '../lib/validate.js';
 import { formatSydney, formatAge } from '../lib/time.js';
 import {
@@ -727,9 +727,9 @@ export async function handleAddPost(req, env) {
   const values = {
     term: String(form.get('term') || ''),
     email: String(form.get('email') || '').trim().slice(0, 254),
-    child_name: cleanText(form.get('child_name'), 100),
+    child_name: cleanName(form.get('child_name'), 100),
     child_dob: String(form.get('child_dob') || '').trim().slice(0, 10),
-    parent_name: cleanText(form.get('parent_name'), 100),
+    parent_name: cleanName(form.get('parent_name'), 100),
     phone: String(form.get('phone') || '').trim().slice(0, 30),
     note: cleanText(form.get('note'), 500),
   };

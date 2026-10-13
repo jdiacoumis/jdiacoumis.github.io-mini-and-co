@@ -23,7 +23,7 @@ import { redirect, notFound } from '../lib/http.js';
 import { uuid, nowIso, isoFromMs } from '../lib/db.js';
 import {
   isValidId, cleanText, normaliseEmail, isValidEmail, normalisePhone, isValidName, validateDob, isYesNo,
-  parseIntInRange,
+  parseIntInRange, cleanName,
 } from '../lib/validate.js';
 import { formatSydney, sydneyFields, sydneyToUtc } from '../lib/time.js';
 import {
@@ -214,10 +214,10 @@ export async function handleAdminNewBookingPost(req, env) {
 
   const email = normaliseEmail(form.get('email'));
   const values = {
-    parent_name: cleanText(form.get('parent_name'), 100),
+    parent_name: cleanName(form.get('parent_name'), 100),
     parent_phone: normalisePhone(form.get('parent_phone')).slice(0, 20),
     child: String(form.get('child') || ''),
-    child_name: cleanText(form.get('child_name'), 100),
+    child_name: cleanName(form.get('child_name'), 100),
     child_dob: String(form.get('child_dob') || '').trim(),
     medical: cleanText(form.get('medical'), 2000),
     photo_consent: String(form.get('photo_consent') || ''),

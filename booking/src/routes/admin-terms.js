@@ -20,7 +20,7 @@ import { html, pageResponse, csrfField, joinHtml } from '../lib/html.js';
 import { requireAdmin, requireCsrf, parseForm } from '../lib/middleware.js';
 import { redirect, notFound } from '../lib/http.js';
 import { uuid, nowIso, isConstraintError } from '../lib/db.js';
-import { isValidId, cleanText, parseIntInRange } from '../lib/validate.js';
+import { isValidId, cleanText, parseIntInRange, cleanName } from '../lib/validate.js';
 import { formatSydney, sydneyFields, sydneyToUtc } from '../lib/time.js';
 import { loadTerm, listTermSessions, formatAud } from '../lib/domain.js';
 import { csvResponse } from '../lib/csv.js';
@@ -267,7 +267,7 @@ function readTermForm(form, { mode }) {
     ...EMPTY_VALUES,
     class_id: text('class_id', 64),
     also: form.getAll('also').map(String).filter((id) => isValidId(id)),
-    name: cleanText(form.get('name'), 100),
+    name: cleanName(form.get('name'), 100),
     starts_on: text('starts_on', 10),
     weeks: text('weeks', 3),
     ends_on: text('ends_on', 10),

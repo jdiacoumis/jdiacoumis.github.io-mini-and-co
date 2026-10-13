@@ -87,19 +87,29 @@ export function reminder({ parentName, childName, className, startsAt, venue, ac
 }
 
 // The owner cancelled a session; creditCents is the credit issued for this
-// child (0 when none was issued).
+// child (0 when none was issued). For a place not paid for yet,
+// priceReducedCents is what was taken off its price and amountNowCents what
+// it now costs (review finding 8).
 export function sessionCancelled({
   parentName, childName, className, startsAt, reason = '', creditCents = 0, accountUrl = '',
+  priceReducedCents = 0, amountNowCents = null,
 }) {
   const why = String(reason || '').trim();
+  let money;
+  if (creditCents > 0) {
+    money = `We've added a credit of ${formatAud(creditCents)} to your account for ${childName}. `
+      + "It's used automatically the next time you book.";
+  } else if (priceReducedCents > 0) {
+    money = `As ${possessive(childName)} place isn't paid for yet, we've taken ${formatAud(priceReducedCents)} off its price`
+      + `${Number.isInteger(amountNowCents) ? ` — it's now ${formatAud(amountNowCents)}` : ''}. Pay from your account as before.`;
+  } else {
+    money = `If you have any questions about ${possessive(childName)} booking, just reply to this email.`;
+  }
   // Subject unchanged from Phase 1 (other modules' tests may look for it).
   return build(`Class cancelled: ${className} ${formatSydney(startsAt, 'date')}`, [
     greeting(parentName),
     `We're sorry to let you know that ${className} on ${formatSydney(startsAt)} has been cancelled${why ? ` (${why})` : ''}.`,
-    creditCents > 0
-      ? `We've added a credit of ${formatAud(creditCents)} to your account for ${childName}. `
-        + "It's used automatically the next time you book."
-      : `If you have any questions about ${possessive(childName)} booking, just reply to this email.`,
+    money,
     accountUrl ? { lead: 'Your bookings and credit:', href: accountUrl, label: 'Open my account' } : null,
   ]);
 }
