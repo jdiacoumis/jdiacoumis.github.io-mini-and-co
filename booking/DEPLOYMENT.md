@@ -36,7 +36,10 @@ Set via `wrangler secret put <NAME>` (never in `wrangler.toml` or git):
 Plain vars (already in `wrangler.toml [vars]`): `ENVIRONMENT=production`,
 `EMAIL_DRIVER=resend`, `PAYMENTS_DRIVER=stripe`, `PUBLIC_BASE_URL`,
 `EMAIL_FROM`, `ADMIN_EMAILS` (comma-separated admin sign-in addresses),
-`META_PIXEL_ID`, `WAIVER_VERSION`.
+`STAFF_EMAILS` (comma-separated facilitators: rosters and attendance only),
+`META_PIXEL_ID`, `WAIVER_VERSION`. Both allowlists are checked on every
+request, so removing an address takes effect immediately. The cron trigger
+(`[triggers]`, every 15 minutes) deploys with the Worker.
 
 ## 3. Stripe
 
@@ -46,7 +49,10 @@ Plain vars (already in `wrangler.toml [vars]`): `ENVIRONMENT=production`,
 3. Developers → Webhooks → Add endpoint:
    - URL: `https://<your-worker>.workers.dev/api/stripe/webhook` (update to
      the real domain after cutover, or register both).
-   - Events: `checkout.session.completed` and `checkout.session.expired`.
+   - Events: `checkout.session.completed`, `checkout.session.expired`,
+     `invoice.paid`, `invoice.payment_failed`,
+     `customer.subscription.deleted` and `charge.refunded` (instalment plans
+     and refunds are reconciled from these).
    - Copy the signing secret into `STRIPE_WEBHOOK_SECRET`.
 4. Test cards: `4242 4242 4242 4242`, any future expiry/CVC.
 
@@ -62,8 +68,12 @@ Plain vars (already in `wrangler.toml [vars]`): `ENVIRONMENT=production`,
 ## 5. Staging deploy and verification
 
 ```bash
-npx wrangler deploy        # deploys to <name>.workers.dev
+npm run deploy             # stages booking/public, then deploys to <name>.workers.dev
 ```
+
+Always deploy with `npm run deploy` (or run `npm run stage` first): the Worker
+serves static files only from `booking/public`, which the staging script
+builds from the site allow-list.
 
 Note: `PUBLIC_BASE_URL` is used in emails and Stripe return URLs. For staging
 verification, temporarily set it to the `workers.dev` URL (and back before the
@@ -86,7 +96,7 @@ Verify on the `workers.dev` URL with Stripe in test mode:
    webhook endpoint for `https://miniandcosensoryclasses.com/api/stripe/webhook`
    (new `STRIPE_WEBHOOK_SECRET`).
 2. Confirm `PUBLIC_BASE_URL=https://miniandcosensoryclasses.com` and
-   `npx wrangler deploy`.
+   `npm run deploy`.
 3. In the Cloudflare dashboard → Workers → your Worker → **Domains & Routes**:
    add the custom domain `miniandcosensoryclasses.com` (and `www` if wanted).
    Cloudflare creates the DNS records on the zone; remove/disable the old

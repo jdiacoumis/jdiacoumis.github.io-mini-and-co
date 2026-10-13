@@ -29,8 +29,8 @@ Columns (header row required, one row per child):
 | `child_dob` | yes | `YYYY-MM-DD`, a real past date, age 0–6 |
 | `medical_notes` | no | free text, ≤ 2000 characters |
 | `photo_consent` | yes | `yes`/`no` (`y`, `n`, `true`, `false`, `1`, `0` accepted) |
-| `enrol_class` | no | exact class name as it appears in `/admin/classes` |
-| `enrol_sessions` | with `enrol_class` | semicolon-separated Sydney-local starts, e.g. `2026-07-01 09:30; 2026-07-08 09:30` |
+| `enrol_class` | no | exact class name as it appears in `/admin/classes`, e.g. `Sensory Play — Wednesday 11:00 am` |
+| `enrol_term` | with `enrol_class` | the term's name for that class, e.g. `Term 1 2027` |
 
 Two children of one parent = two rows with the same `parent_email`.
 A parent with no current enrolment = leave both `enrol_*` columns empty.
@@ -40,7 +40,7 @@ A parent with no current enrolment = leave both `enrol_*` columns empty.
 `/admin/import` → choose the file → **Preview import**. Every row is shown as
 valid (with whether it creates new records or matches existing ones) or
 invalid with the reason (bad email, impossible date of birth, ambiguous
-consent, unknown class/session, …). Nothing has been written at this point —
+consent, unknown class or term, …). Nothing has been written at this point —
 navigating away abandons the upload.
 
 Fix invalid rows in the spreadsheet and re-upload, or proceed: committing
@@ -53,10 +53,11 @@ imports the valid rows and skips invalid ones, reporting each skipped row.
 - the parent account (or matches the existing one by email — details of
   existing accounts are never overwritten),
 - the child profile (or matches by parent + child name),
-- for enrolment rows: a **confirmed, externally-paid** booking
-  (`payment_provider=external`, nothing owing) that occupies seats in the
-  listed sessions. No payment is requested and no conversion event is fired
-  for migrated bookings.
+- for enrolment rows: a **confirmed, externally-paid term booking**
+  (`payment_provider=external`, nothing owing) that occupies a seat in every
+  remaining session of that term. No payment is requested and no conversion
+  event is fired for migrated bookings. Re-importing the same file never
+  enrols a child twice.
 
 Re-committing the same file (or a corrected version including already-imported
 rows) reports those rows as already existing and changes nothing — safe to
