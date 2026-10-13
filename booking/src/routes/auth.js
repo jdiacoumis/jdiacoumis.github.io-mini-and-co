@@ -7,7 +7,11 @@
 //     form; the token is consumed by the POST, so mail scanners that prefetch
 //     links cannot burn them.
 //   * No account enumeration: identical responses for known/unknown emails,
-//     including when rate limited.
+//     including when the per-address limit is reached.
+//   * No sign-in lockout (adversarial review, finding 4): the per-IP limit
+//     is checked first and alone, and the per-address limit counts per
+//     address AND IP — so requests made in a family's (or the owner's) name
+//     from somewhere else never use up their own sign-in links.
 //   * Sign-out is a CSRF-protected POST with server-side session revocation.
 
 import { html, pageResponse, csrfField } from '../lib/html.js';
@@ -75,7 +79,20 @@ export async function handleRequestMagicLink(req, env) {
   return pageResponse('Sign in', signInForm({ next }));
 }
 
-// POST /auth/request-magic-link — send the link; rate-limited per email + IP.
+export const MAGIC_LINKS_PER_IP_HOUR = 10;
+export const MAGIC_LINKS_PER_ADDRESS_AND_IP_HOUR = 3;
+
+function checkEmailPage(email) {
+  const body = html`
+    <h1>Check your email</h1>
+    <p class="lede">If everything is in order, a sign-in link is on its way to <strong>${email}</strong>. It can be used once and expires in 20 minutes.</p>
+    <p>Nothing arrived after a couple of minutes? Check your spam folder, or <a href="/auth/request-magic-link">request another link</a>.</p>
+  `;
+  return pageResponse('Check your email', body);
+}
+
+// POST /auth/request-magic-link — send the link; rate-limited per IP, then
+// per address + IP.
 export async function handleRequestMagicLinkPost(req, env) {
   const form = await parseForm(req);
   const email = normaliseEmail(form.get('email'));
@@ -89,17 +106,21 @@ export async function handleRequestMagicLinkPost(req, env) {
     }), { status: 400 });
   }
 
-  // Security: per-email and per-IP fixed-window limits slow brute force and
-  // email bombing (CWE-307). The refusal is generic for known and unknown
-  // addresses alike, so it cannot be used for account enumeration.
+  // Security: fixed-window limits slow brute force and email bombing
+  // (CWE-307). The per-IP limit comes first and on its own: a refused
+  // request is never counted against the address. The per-address limit is
+  // keyed on address + IP, so a flood of requests for someone else's
+  // address from one place can't stop them signing in from theirs; when it
+  // is reached nothing is sent, the refusal is logged, and the page reads
+  // exactly like a sent link (no enumeration, no error for the family).
   const ip = clientIp(req);
-  const [emailAllowed, ipAllowed] = await Promise.all([
-    allowRate(env, `auth:email:${email}`, 3, 3600),
-    allowRate(env, `auth:ip:${ip}`, 10, 3600),
-  ]);
-  if (!emailAllowed || !ipAllowed) {
-    logEvent('magic_link_rate_limit', { email: maskEmail(email) });
+  if (!(await allowRate(env, `auth:ip:${ip}`, MAGIC_LINKS_PER_IP_HOUR, 3600))) {
+    logEvent('magic_link_rate_limit', { scope: 'ip' });
     throw tooMany();
+  }
+  if (!(await allowRate(env, `auth:email:${email}:${ip}`, MAGIC_LINKS_PER_ADDRESS_AND_IP_HOUR, 3600))) {
+    logEvent('magic_link_rate_limit', { scope: 'address', email: maskEmail(email) });
+    return checkEmailPage(email);
   }
 
   // Only send to registered accounts — but respond identically either way
@@ -113,13 +134,7 @@ export async function handleRequestMagicLinkPost(req, env) {
     logError('magic_link_send_failed', err, { email: maskEmail(email) });
     // Swallow: the user-facing response must not reveal delivery internals.
   }
-
-  const body = html`
-    <h1>Check your email</h1>
-    <p class="lede">If everything is in order, a sign-in link is on its way to <strong>${email}</strong>. It can be used once and expires in 20 minutes.</p>
-    <p>Nothing arrived after a couple of minutes? Check your spam folder, or <a href="/auth/request-magic-link">request another link</a>.</p>
-  `;
-  return pageResponse('Check your email', body);
+  return checkEmailPage(email);
 }
 
 const GENERIC_TOKEN_FAILURE = html`
