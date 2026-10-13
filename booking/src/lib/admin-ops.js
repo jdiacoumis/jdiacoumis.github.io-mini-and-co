@@ -564,6 +564,12 @@ export async function cancelSessionWithCredits(env, sessionId, { reason, by, now
     const creditReason = `Class cancelled — ${session.class_name}, ${when}${reason ? ` (${reason})` : ''}`.slice(0, 300);
     const statements = [
       ...txnGuard(env, `(SELECT status FROM class_sessions WHERE id = ?1) = 'scheduled'`, [sessionId], 'session'),
+      // Nobody may have taken a seat since the plan was read (they would
+      // keep a place in a cancelled class with no credit): re-read instead.
+      ...txnGuard(env,
+        `(SELECT COUNT(*) FROM booking_sessions cbs JOIN bookings cb ON cb.id = cbs.booking_id
+          WHERE cbs.session_id = ?1 AND ${holdsSeatSql('cbs', 'cb', '?2')}) = ?3`,
+        [sessionId, now, plan.length], 'newcomer'),
       env.DB.prepare(
         `UPDATE class_sessions SET status = 'cancelled', cancelled_reason = ?2, cancelled_at = ?3
          WHERE id = ?1 AND status = 'scheduled'`,

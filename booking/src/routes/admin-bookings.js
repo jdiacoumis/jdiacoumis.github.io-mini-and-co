@@ -14,7 +14,7 @@
 // (cancel booking, cancel a week) have a confirm page.
 
 import { html, pageResponse, csrfField, joinHtml } from '../lib/html.js';
-import { requireAdmin, requireCsrf, parseForm } from '../lib/middleware.js';
+import { requireAdmin, requireCsrf, parseForm, roleFor } from '../lib/middleware.js';
 import { redirect, notFound, HttpError } from '../lib/http.js';
 import { uuid, nowIso, isConstraintError } from '../lib/db.js';
 import { formatSydney, formatAge, sydneyToUtc } from '../lib/time.js';
@@ -966,7 +966,7 @@ export async function handleAdminCustomerEdit(req, env, params) {
   const user = await requireAdmin(req, env);
   const form = await parseForm(req);
   requireCsrf(req, user, form);
-  const parent = await env.DB.prepare(`SELECT id FROM users WHERE id = ?1`).bind(params.id).first();
+  const parent = await env.DB.prepare(`SELECT id, email FROM users WHERE id = ?1`).bind(params.id).first();
   if (!parent) throw notFound();
   const values = {
     name: cleanText(form.get('name'), 100),
@@ -976,16 +976,29 @@ export async function handleAdminCustomerEdit(req, env, params) {
   const again = (error) => customerPage(env, user, parent.id, { error, status: 400, parentValues: values });
   if (!isValidEmail(values.email)) return again('Please enter a full email address.');
   if (values.phone && !isValidAuPhone(values.phone)) return again('That phone number doesn’t look right — use 8 to 12 digits.');
+  const emailChanged = values.email !== parent.email;
+  // Security: rights come from the email allowlists, so an email change must
+  // never turn a family account into an owner/facilitator one (or rename one).
+  if (emailChanged && roleFor(env, parent.email) !== 'parent') {
+    return again('This is an owner or facilitator account — its email can’t be changed here.');
+  }
+  if (emailChanged && roleFor(env, values.email) !== 'parent') {
+    return again('That address belongs to the owner or a facilitator — please use the family’s own email.');
+  }
   const taken = await env.DB.prepare(`SELECT id FROM users WHERE email = ?1 AND id != ?2`).bind(values.email, parent.id).first();
   if (taken) return again('Another account already uses that email address.');
   try {
-    await env.DB.prepare(`UPDATE users SET name = ?2, email = ?3, phone = ?4 WHERE id = ?1`)
-      .bind(parent.id, values.name, values.email, values.phone).run();
+    await env.DB.batch([
+      env.DB.prepare(`UPDATE users SET name = ?2, email = ?3, phone = ?4 WHERE id = ?1`)
+        .bind(parent.id, values.name, values.email, values.phone),
+      // A new sign-in address signs the account out everywhere.
+      ...(emailChanged ? [env.DB.prepare(`DELETE FROM web_sessions WHERE user_id = ?1`).bind(parent.id)] : []),
+    ]);
   } catch (err) {
     if (isConstraintError(err)) return again('Another account already uses that email address.');
     throw err;
   }
-  logEvent('customer_updated', { user_id: parent.id.slice(0, 8), by: user.userId.slice(0, 8) });
+  logEvent('customer_updated', { user_id: parent.id.slice(0, 8), email_changed: emailChanged, by: user.userId.slice(0, 8) });
   return redirect(`/admin/customers/${parent.id}?ok=customer-updated`, 303);
 }
 

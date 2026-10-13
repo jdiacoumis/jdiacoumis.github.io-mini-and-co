@@ -161,12 +161,18 @@ export async function run(ctx) {
     method: 'POST', cookie: admin, body: { csrf, name: 'Erin Example', email: 'E2E-OPS-DUP@example.com', phone: '' },
   });
   ctx.check('an email used by another account is refused', dupEmail.status === 400 && dupEmail.text.includes('already uses that email'));
+  const ownerEmail = await ctx.fetch(`/admin/customers/${evie.user_id}/edit`, {
+    method: 'POST', cookie: admin, body: { csrf, name: 'Erin Example', email: 'facilitator@example.com', phone: '' },
+  });
+  ctx.check("a family account can't be given a facilitator's address", ownerEmail.status === 400 && ownerEmail.text.includes('belongs to the owner or a facilitator'));
   const editParent = await ctx.fetch(`/admin/customers/${evie.user_id}/edit`, {
     method: 'POST', cookie: admin, body: { csrf, name: 'Erin Example', email: ' E2E-Admin-E2@Example.com ', phone: '0400 123 456' },
   });
   const [parentRow] = ctx.sql(`SELECT name, email, phone FROM users WHERE id = '${evie.user_id}'`);
   ctx.check('parent details saved (email normalised)', editParent.location.endsWith('ok=customer-updated') && parentRow.name === 'Erin Example'
     && parentRow.email === 'e2e-admin-e2@example.com' && parentRow.phone === '0400123456', JSON.stringify(parentRow));
+  const signedOut = await ctx.fetch('/account', { cookie: parent });
+  ctx.check('a new sign-in email signs the family out everywhere', signedOut.status === 303 && signedOut.location.includes('/auth/request-magic-link'));
   const addChild = await ctx.fetch(`/admin/customers/${evie.user_id}/children/new`, {
     method: 'POST', cookie: admin, body: { csrf, name: 'Ezra', dob: ctx.sydneyDate(-60), medical: '', photo_consent: 'no' },
   });
