@@ -686,6 +686,339 @@ button:active {
 
 /* === 2B admin operations (routes/admin*.js) — start === */
 
+/* Wide admin pages (term grid, bookings, rosters) use the full site width;
+   anything wider scrolls sideways inside .table-scroll, never the page. */
+.booking-main:has(.admin-wide) {
+  max-width: var(--max-width);
+}
+
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: var(--space-sm) 0;
+}
+
+.table-scroll .booking-table {
+  margin: 0;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.breadcrumb {
+  font-size: 0.9rem;
+  color: var(--colour-text-muted);
+  margin: 0 0 var(--space-2xs);
+}
+
+.form-hint {
+  color: var(--colour-text-muted);
+  font-size: 0.85rem;
+  margin: var(--space-2xs) 0;
+}
+
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-md);
+}
+
+.form-row > .form-group {
+  flex: 1 1 12rem;
+}
+
+.inline-actions,
+.quick-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs) var(--space-sm);
+  margin: var(--space-sm) 0;
+}
+
+.inline-actions .inline-form {
+  margin: 0;
+}
+
+.confirm-box {
+  background-color: var(--colour-bg-blush);
+  border: 1px solid var(--colour-accent-blush);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  margin: var(--space-md) 0;
+}
+
+.check-list label {
+  display: block;
+  min-height: 44px;
+  padding: var(--space-2xs) 0;
+  font-weight: 300;
+}
+
+.check-list input {
+  width: auto;
+  margin-right: var(--space-2xs);
+}
+
+.plain-list {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-2xs) 0;
+}
+
+.nested-fields {
+  margin-left: var(--space-lg);
+}
+
+.filter-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-xs) var(--space-sm);
+  margin: var(--space-sm) 0;
+}
+
+.filter-form label {
+  font-size: 0.85rem;
+  color: var(--colour-text-soft);
+}
+
+.filter-form select,
+.filter-form input[type="search"] {
+  width: auto;
+  min-width: 9rem;
+  display: block;
+}
+
+.filter-form .filter-check input {
+  width: auto;
+}
+
+.inline-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-sm);
+}
+
+.inline-search .form-group {
+  flex: 1 1 16rem;
+  margin-bottom: 0;
+}
+
+.detail-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-2xs) var(--space-md);
+  background-color: #fff;
+  border: 1px solid var(--colour-line-soft);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+}
+
+.detail-list dt {
+  font-weight: 500;
+  color: var(--colour-text-soft);
+}
+
+.detail-list dd {
+  margin: 0;
+}
+
+/* Dashboard tiles */
+.stat-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--space-sm);
+  margin: var(--space-md) 0;
+}
+
+.stat-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  background-color: #fff;
+  border: 1px solid var(--colour-line-soft);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  color: var(--colour-text);
+  text-decoration: none;
+  box-shadow: var(--shadow-soft);
+}
+
+.stat-tile:hover {
+  border-color: var(--colour-accent-sage);
+}
+
+.stat-tile-alert {
+  background-color: var(--colour-bg-blush);
+  border-color: var(--colour-accent-blush);
+}
+
+.stat-number {
+  font-family: var(--font-display);
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.stat-label {
+  font-size: 0.9rem;
+  color: var(--colour-text-soft);
+}
+
+/* Term status badges */
+.term-status-open { background-color: var(--colour-bg-sage); }
+.term-status-draft { background-color: var(--colour-bg-warm); }
+.term-status-closed { background-color: var(--colour-line-soft); color: var(--colour-text-muted); }
+
+.add-week-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.add-week-form input[type="date"] {
+  width: auto;
+}
+
+/* The term grid: families × weeks, first column pinned while scrolling. */
+.term-grid th,
+.term-grid td {
+  white-space: nowrap;
+  text-align: center;
+}
+
+.term-grid .grid-family {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  text-align: left;
+  background-color: #fff;
+  white-space: normal;
+  min-width: 10rem;
+}
+
+.term-grid .grid-week a {
+  font-weight: 500;
+}
+
+.grid-week-cancelled {
+  opacity: 0.6;
+}
+
+.grid-cell {
+  font-size: 1.1rem;
+  min-width: 2.75rem;
+}
+
+.grid-present { background-color: var(--colour-bg-sage); }
+.grid-absent { background-color: var(--colour-bg-blush); }
+.grid-cancelled,
+.grid-moved { color: var(--colour-text-muted); }
+
+.term-grid .grid-payment {
+  text-align: left;
+  white-space: normal;
+  min-width: 11rem;
+}
+
+.grid-pay-overdue,
+.grid-pay-unpaid { color: #8a3b3b; }
+.grid-pay-comp,
+.grid-pay-ended { color: var(--colour-text-muted); }
+
+.grid-seats {
+  color: var(--colour-text-soft);
+  font-size: 0.85rem;
+}
+
+.grid-legend {
+  margin: var(--space-xs) 0 0;
+}
+
+/* Roster and attendance: big touch targets for a phone in one hand. */
+.attendance-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs);
+  margin: 0 0 var(--space-2xs);
+}
+
+.attendance-button {
+  min-height: 44px;
+  min-width: 44px;
+  padding: var(--space-2xs) var(--space-sm);
+  background-color: #fff;
+  color: var(--colour-text);
+  border: 1px solid var(--colour-line);
+}
+
+.attendance-button:hover {
+  background-color: var(--colour-bg-warm);
+}
+
+.attendance-present[aria-pressed="true"] {
+  background-color: var(--colour-accent-sage);
+  border-color: var(--colour-accent-sage);
+}
+
+.attendance-absent[aria-pressed="true"] {
+  background-color: var(--colour-accent-blush);
+  border-color: var(--colour-accent-blush);
+}
+
+.attendance-row-present td:first-child { border-left: 4px solid var(--colour-accent-sage); }
+.attendance-row-absent td:first-child { border-left: 4px solid var(--colour-accent-blush); }
+
+.consent-no {
+  font-weight: 600;
+}
+
+.staff-nav {
+  display: flex;
+  gap: var(--space-md);
+  border-bottom: 1px solid var(--colour-line);
+  padding-bottom: var(--space-xs);
+  margin-bottom: var(--space-md);
+}
+
+.staff-nav a {
+  color: var(--colour-text-soft);
+  text-decoration: none;
+}
+
+.attention-actions .inline-form,
+.attention-actions .inline-details {
+  display: block;
+  margin: var(--space-2xs) 0;
+}
+
+.attention-ended summary {
+  cursor: pointer;
+  font-weight: 500;
+  margin: var(--space-md) 0 var(--space-xs);
+}
+
+@media (max-width: 640px) {
+  .detail-list {
+    grid-template-columns: 1fr;
+  }
+
+  .nested-fields {
+    margin-left: 0;
+  }
+}
+
 /* === 2B admin operations — end === */
 
 /* === 2C waitlist admin, email, ops (routes/admin-waitlist.js, admin-email.js) — start === */
