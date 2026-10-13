@@ -102,6 +102,13 @@ test('nothing for an absent child, a cancelled trial, or a child already booked 
   }
 });
 
+test('nothing once the term is closed', async () => {
+  const fam = await seedFamilyAndTerm(env, { prefix: 'tf-h', startInDays: -2, status: 'closed' });
+  await confirmedTrial(fam, fam.sessionIds[0], { id: 'tf-h-trial' });
+  assert.equal((await sendTrialFollowUps(env, { now: now() })).sent, 0);
+  assert.equal((await mailFor('tf-h@example.com')).length, 0);
+});
+
 test('a full term gets a waitlist invitation instead', async () => {
   const fam = await seedFamilyAndTerm(env, { prefix: 'tf-g', startInDays: -2, capacity: 1, children: 2 });
   await confirmedTrial(fam, fam.sessionIds[0], { id: 'tf-g-trial' });

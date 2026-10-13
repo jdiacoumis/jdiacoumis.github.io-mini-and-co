@@ -14,9 +14,10 @@ import { requireAuthOrRedirect, requireCsrf, parseForm } from '../lib/middleware
 import { redirect, notFound, badRequest, tooMany } from '../lib/http.js';
 import { isValidId, isValidName, isValidAuPhone, normalisePhone, cleanText } from '../lib/validate.js';
 import { formatSydney, formatAge } from '../lib/time.js';
-import { nowIso } from '../lib/db.js';
+import { nowIso, isoPlusSeconds } from '../lib/db.js';
 import {
   listUserBookings, effectiveStatus, getOwnedBooking, loadTerm, abandonCheckout, formatAud,
+  PENDING_BOOKING_EXPIRY_SECS,
 } from '../lib/domain.js';
 import { availableCredits } from '../lib/ledger.js';
 import { planFor, instalmentSchedule } from '../lib/pricing.js';
@@ -25,7 +26,7 @@ import { allowRate } from '../lib/ratelimit.js';
 import { logEvent, logError } from '../lib/log.js';
 import {
   paymentStatusView, describeDates, isPayLaterHold, waitlistPositionText, listChildren,
-  instalmentCounts, listWaitlistEntries, plural, PAYMENT_RECEIVED_FLAGS,
+  instalmentCounts, listWaitlistEntries, plural, isInstalmentPlan, PAYMENT_RECEIVED_FLAGS,
 } from '../lib/parent-flow.js';
 import {
   bookingTitle, paymentDescription, planChoice, consentFields, readConsent, createHostedCheckout,
@@ -66,7 +67,7 @@ function bookingCard(b, { now, instalmentsPaid, user }) {
   const starts = String(b.session_starts || '').split('|').filter(Boolean).sort();
   const when = describeDates(starts);
   const next = status === 'confirmed' ? starts.find((s) => s > now) : null;
-  const runningPlan = status === 'confirmed' && b.payment_method === 'plan'
+  const runningPlan = status === 'confirmed' && isInstalmentPlan(b)
     && (b.payment_status === 'plan_active' || b.payment_status === 'plan_overdue');
   const actions = [];
   if (view.key === 'pay_now') actions.push(html`<a class="button-link" href="/account/bookings/${b.id}/pay">Pay now</a>`);
@@ -176,7 +177,7 @@ export async function handleAccountDashboard(req, env) {
   const earlier = bookings.filter((b) => !isCurrent(b, now));
   const card = (b) => bookingCard(b, { now, instalmentsPaid: counts.get(b.id) || 0, user });
   const attention = attentionItems(current, { now, user });
-  const hasRunningPlan = current.some((b) => b.payment_method === 'plan'
+  const hasRunningPlan = current.some((b) => isInstalmentPlan(b)
     && (b.payment_status === 'plan_active' || b.payment_status === 'plan_overdue'));
 
   const childItems = children.map((c) => html`
@@ -388,13 +389,24 @@ export async function handlePayNowPost(req, env, params, ctx) {
     }
   }
 
-  // Snapshot how this booking is being paid: the webhook (cancel_at, plan
-  // progress) and the mock checkout read these fields.
-  await env.DB.prepare(
-    `UPDATE bookings SET payment_method = ?3, plan_instalments = ?4, plan_instalment_cents = ?5, plan_interval = ?6
-     WHERE id = ?1 AND user_id = ?2 AND status = 'pending' AND payment_ref IS NULL`,
-  ).bind(booking.id, user.userId, plan ? 'plan' : 'full', plan ? plan.n : null, plan ? plan.eachCents : null,
-    plan ? plan.interval : null).run();
+  // The hosted checkout stays open for about half an hour. A live hold that
+  // ends sooner is stretched to the usual checkout hold — and a waitlist
+  // offer's deadline with it, so the offer-expiry job leaves it alone — so a
+  // family part-way through paying never loses the place under them. Holds
+  // with longer to run keep their own expiry; a lapsed hold is never revived.
+  const minHold = isoPlusSeconds(PENDING_BOOKING_EXPIRY_SECS, Date.parse(now));
+  if (booking.expires_at < minHold) {
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE bookings SET expires_at = ?3
+         WHERE id = ?1 AND user_id = ?2 AND status = 'pending' AND expires_at > ?4 AND expires_at < ?3`,
+      ).bind(booking.id, user.userId, minHold, now),
+      env.DB.prepare(
+        `UPDATE waitlist SET offer_expires_at = ?3
+         WHERE offer_booking_id = ?1 AND user_id = ?2 AND status = 'offered' AND offer_expires_at > ?4 AND offer_expires_at < ?3`,
+      ).bind(booking.id, user.userId, minHold, now),
+    ]);
+  }
 
   let url;
   try {

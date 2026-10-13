@@ -8,7 +8,7 @@ import { createTestDb, seedFamilyAndTerm, daysFromNow, iso } from './helpers.js'
 import {
   termOffer, termHeadline, planSummary, seatsText, casualPriceText, describeDates, isCheckoutHold,
   isPayLaterHold, paymentStatusView, planScheduleView, waitlistPositionText, listWaitlistEntries,
-  pendingHoldsForChild, liveTermBookings, instalmentCounts, childrenWithTrial,
+  pendingHoldsForChild, liveTermBookings, instalmentCounts, childrenWithTrial, isInstalmentPlan,
 } from '../../src/lib/parent-flow.js';
 import { prepareBooking, createPendingBooking, confirmBooking } from '../../src/lib/domain.js';
 
@@ -179,7 +179,7 @@ test('payment status: paid, plan k of n with next charge, overdue, complete, unp
   assert.deepEqual(paymentStatusView(booking(), { now }), { key: 'paid', label: 'Paid', detail: '', tone: 'ok' });
   const plan = booking({
     payment_method: 'plan', payment_status: 'plan_active', plan_instalments: 6, paid_cents: 5600,
-    plan_next_charge_at: '2027-02-17T00:00:00Z',
+    plan_next_charge_at: '2027-02-17T00:00:00Z', stripe_subscription_id: 'sub_1',
   });
   const active = paymentStatusView(plan, { instalmentsPaid: 2, now });
   assert.equal(active.label, 'Instalments: 2 of 6 paid');
@@ -192,6 +192,16 @@ test('payment status: paid, plan k of n with next charge, overdue, complete, unp
   assert.deepEqual([unpaid.label, unpaid.detail], ['Unpaid', '$100.00 to pay']);
   assert.equal(paymentStatusView(booking({ kind: 'complimentary', payment_status: 'waived', amount_cents: 0 }), { now }).label, 'Complimentary');
   assert.equal(paymentStatusView(booking({ amount_cents: 0, credit_cents: 3000, paid_cents: 3000 }), { now }).detail, 'with account credit');
+});
+
+test('a plan chosen but never started (settled another way) is not shown as instalments', () => {
+  const now = NOW;
+  const stale = booking({ payment_method: 'plan', plan_instalments: 6, stripe_subscription_id: null });
+  assert.equal(isInstalmentPlan(stale), false);
+  assert.equal(isInstalmentPlan({ ...stale, stripe_subscription_id: 'sub_1' }), true);
+  assert.deepEqual(paymentStatusView({ ...stale, payment_status: 'plan_complete' }, { now }), { key: 'paid', label: 'Paid', detail: '', tone: 'ok' });
+  const part = paymentStatusView({ ...stale, payment_status: 'plan_active', paid_cents: 6800 }, { now });
+  assert.deepEqual([part.label, part.detail], ['Unpaid', '$100.00 to pay']);
 });
 
 test('payment status: holds, lapsed and cancelled bookings, money that arrived late', () => {
@@ -216,6 +226,14 @@ test('the plan schedule marks the instalments already paid', () => {
   }), 1);
   assert.deepEqual(rows.map((r) => [r.amountCents, r.paid]), [[3334, true], [3333, false], [3333, false]]);
   assert.equal(rows[1].dueAt, '2027-02-17T00:00:00Z');
+
+  // A place held for a week and paid today: the dates run from today, not
+  // from when the hold was created, while the payment record is on its way.
+  const held = planScheduleView(booking({
+    amount_cents: 10000, payment_method: 'plan', plan_instalments: 3, plan_interval: 'week',
+    paid_at: null, created_at: '2027-02-01T00:00:00Z',
+  }), 0, '2027-02-08T03:00:00Z');
+  assert.deepEqual(held.map((r) => r.dueAt), ['2027-02-08T03:00:00Z', '2027-02-15T03:00:00Z', '2027-02-22T03:00:00Z']);
 });
 
 // --- Owner-scoped reads against a real D1 ------------------------------------

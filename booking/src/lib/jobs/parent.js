@@ -7,9 +7,10 @@
 //   price and eligibility the checkout would give), or the term's waitlist
 //   when it is full. Nothing is sent when the child has since booked the
 //   rest of the term, the term has finished or closed, the trial session was
-//   cancelled, or the child was marked absent. Idempotent: the email_log
-//   dedupe key trial_followup:<booking id> sends it at most once (a failed
-//   send is retried by a later run).
+//   cancelled, or the child was marked absent — those are filtered in SQL,
+//   newest trials first, so rows that can never be sent don't crowd the
+//   batch. Idempotent: the email_log dedupe key trial_followup:<booking id>
+//   sends it at most once (a failed send is retried by a later run).
 
 import { prepareBooking, bookingLiveSql } from '../domain.js';
 import { instalmentSchedule } from '../pricing.js';
@@ -64,12 +65,15 @@ export async function sendTrialFollowUps(env, { now }) {
        AND cs.status = 'scheduled' AND cs.starts_at <= ?1 AND cs.starts_at > ?2
        AND (bs.attendance IS NULL OR bs.attendance = 'present')
        AND ch.archived_at IS NULL
+       AND t.status = 'open'
+       AND EXISTS (SELECT 1 FROM class_sessions us
+                   WHERE us.term_id = t.id AND us.status = 'scheduled' AND us.starts_at > ?3)
        AND NOT EXISTS (SELECT 1 FROM bookings tb
                        WHERE tb.child_id = b.child_id AND tb.term_id = b.term_id AND tb.kind = 'term'
                          AND ${bookingLiveSql('tb', '?3')})
        AND NOT EXISTS (SELECT 1 FROM email_log el
                        WHERE el.dedupe_key = 'trial_followup:' || b.id AND el.status = 'sent')
-     ORDER BY cs.starts_at
+     ORDER BY cs.starts_at DESC
      LIMIT ${BATCH}`,
   ).bind(cutoff, floor, now).all()).results || [];
 

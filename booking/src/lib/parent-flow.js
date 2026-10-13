@@ -138,6 +138,14 @@ export function isPayLaterHold(booking, now) {
 // Flags meaning money arrived but the booking could not be honoured as is.
 export const PAYMENT_RECEIVED_FLAGS = ['paid_no_seat', 'paid_after_cancel'];
 
+// A booking really paid by instalments: a plan was chosen AND its
+// subscription started. (A plan chosen for a checkout that was abandoned,
+// then settled another way, is not one.)
+export function isInstalmentPlan(booking) {
+  return booking.payment_method === 'plan' && Boolean(booking.plan_instalments)
+    && Boolean(booking.stripe_subscription_id);
+}
+
 // The payment line a family sees for one booking.
 //   booking: a bookings row (listUserBookings / getOwnedBooking shape)
 //   instalmentsPaid: number of 'instalment' ledger rows for it
@@ -170,7 +178,12 @@ export function paymentStatusView(booking, { instalmentsPaid = 0, now }) {
     return { key: 'paying', label: 'Payment in progress', detail: '', tone: 'due' };
   }
   const n = booking.plan_instalments || 0;
-  switch (booking.payment_status) {
+  let paymentStatus = booking.payment_status;
+  if (paymentStatus.startsWith('plan_') && !isInstalmentPlan(booking)) {
+    // A plan was chosen but never started (settled another way).
+    paymentStatus = paymentStatus === 'plan_complete' || owing === 0 ? 'paid' : 'unpaid';
+  }
+  switch (paymentStatus) {
     case 'paid':
       return booking.amount_cents === 0 && booking.credit_cents > 0
         ? { key: 'credit', label: 'Paid', detail: 'with account credit', tone: 'ok' }
@@ -194,10 +207,12 @@ export function paymentStatusView(booking, { instalmentsPaid = 0, now }) {
 }
 
 // The instalment schedule of a plan booking, with the ones already paid
-// marked (dates anchored on the first payment, as Stripe bills them).
-export function planScheduleView(booking, instalmentsPaid = 0) {
+// marked. Dates are anchored on the first payment, as Stripe bills them —
+// or on `now` while that payment is still on its way (never on when the
+// booking was created: a held place may be paid for days later).
+export function planScheduleView(booking, instalmentsPaid = 0, now = null) {
   if (!booking.plan_instalments || booking.amount_cents <= 0) return [];
-  const anchor = booking.paid_at || booking.created_at;
+  const anchor = booking.paid_at || now || booking.created_at;
   const schedule = instalmentSchedule(booking.amount_cents, booking.plan_instalments, booking.plan_interval || 'week', anchor);
   return schedule.payments.map((p) => ({ ...p, paid: p.index <= instalmentsPaid }));
 }

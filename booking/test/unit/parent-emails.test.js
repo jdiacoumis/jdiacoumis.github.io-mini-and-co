@@ -37,7 +37,7 @@ test('confirmation for an instalment plan carries the dated schedule', () => {
   const email = bookingConfirmationEmail({
     booking: booking({
       amount_cents: 10000, paid_cents: 3334, payment_method: 'plan', payment_status: 'plan_active',
-      plan_instalments: 3, plan_interval: 'week',
+      plan_instalments: 3, plan_interval: 'week', stripe_subscription_id: 'sub_1',
     }),
     env,
   });
@@ -47,6 +47,23 @@ test('confirmation for an instalment plan carries the dated schedule', () => {
   assert.match(email.text, / {2}3\. Wed, 17 Feb 2027 — \$33\.33/);
   assert.match(email.text, /your place is kept/);
   assert.equal((String(email.html).match(/<li>/g) || []).length, 2 + 3, 'two classes and three instalments');
+});
+
+test('plan dates run from the payment, or from the confirmation, never from when a hold was created', () => {
+  const held = booking({
+    amount_cents: 10000, paid_cents: 0, paid_at: null, created_at: '2027-01-20T00:00:00Z', payment_method: 'plan',
+    payment_status: 'unpaid', plan_instalments: 3, plan_interval: 'week', stripe_subscription_id: 'sub_2',
+  });
+  const email = bookingConfirmationEmail({ booking: held, env, now: '2027-01-27T00:00:00Z' });
+  assert.match(email.text, / {2}1\. Wed, 27 Jan 2027 — \$33\.34 \(charged at checkout\)/);
+  assert.match(email.text, / {2}3\. Wed, 10 Feb 2027 — \$33\.33/);
+});
+
+test('a plan chosen but never started is not described as instalments', () => {
+  const settled = booking({ payment_method: 'plan', plan_instalments: 6, payment_status: 'plan_complete', stripe_subscription_id: null });
+  const email = bookingConfirmationEmail({ booking: settled, env });
+  assert.ok(!email.text.includes('Payment plan'));
+  assert.match(email.text, /Paid: \$168\.00 AUD\./);
 });
 
 test('voucher and credit lines; credit-covered and complimentary bookings', () => {

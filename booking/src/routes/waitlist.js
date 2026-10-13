@@ -179,7 +179,9 @@ export async function handleWaitlistJoin(req, env) {
     `SELECT id, status, note, offer_booking_id FROM waitlist WHERE term_id = ?1 AND child_id = ?2`,
   ).bind(term.id, child.id).first();
   if (existing && (existing.status === 'waiting' || existing.status === 'offered')) return back('already');
-  if (existing && existing.status === 'booked') return back('booked');
+  // (An entry marked booked by a trial or chosen-weeks offer, or whose
+  // booking was later cancelled, may join again: the child holds no term
+  // place — checked just above.)
 
   const insert = env.DB.prepare(
     `INSERT INTO waitlist (id, term_id, user_id, child_id, status, note, joined_at, offer_booking_id)
@@ -189,13 +191,15 @@ export async function handleWaitlistJoin(req, env) {
   if (existing) {
     // Re-joining goes to the back of the line: the entry is re-created, so
     // even a family joining in the same second is ordered correctly. Notes
-    // (and a past offer's booking, should its payment still arrive) carry over.
+    // carry over, and so does a declined offer's booking (should its payment
+    // still arrive, the entry is marked booked).
     const note = `${existing.note ? `${existing.note} ` : ''}Re-joined online ${formatSydney(now, 'date')}.`;
     await env.DB.batch([
       env.DB.prepare(
-        `DELETE FROM waitlist WHERE id = ?1 AND user_id = ?2 AND status IN ('removed', 'declined')`,
+        `DELETE FROM waitlist WHERE id = ?1 AND user_id = ?2 AND status IN ('removed', 'declined', 'booked')`,
       ).bind(existing.id, user.userId),
-      insert.bind(uuid(), term.id, user.userId, child.id, note.slice(0, 1000), now, existing.offer_booking_id),
+      insert.bind(uuid(), term.id, user.userId, child.id, note.slice(0, 1000), now,
+        existing.status === 'declined' ? existing.offer_booking_id : null),
     ]);
   } else {
     await insert.bind(uuid(), term.id, user.userId, child.id, '', now, null).run();
@@ -250,6 +254,14 @@ export async function handleWaitlistLeave(req, env) {
       return pageResponse('Please try again', page(body), { user, status: 503 });
     }
     await expireBooking(env, offer.id);
+    // A Pay now in another tab may have attached a new checkout between the
+    // close and the expiry: close that one too (once expired, no further
+    // checkout can attach). A payment that still lands meets the D6 guard.
+    const after = await getOwnedBooking(env, offer.id, user.userId);
+    if (after && after.payment_ref && after.payment_ref !== offer.payment_ref) {
+      const late = await closeProviderCheckout(env, after);
+      if (late === 'complete') return redirect(`/book/confirm?booking=${offer.id}`, 303);
+    }
   }
   const declined = await env.DB.prepare(
     `UPDATE waitlist SET status = 'declined', resolved_at = ?3, note = TRIM(note || ' ' || ?4)

@@ -37,7 +37,7 @@ import { logEvent, logError } from '../lib/log.js';
 import {
   termOffer, termHeadline, planSummary, seatsText, casualPriceText, plural, isPayLaterHold,
   planScheduleView, waitlistPositionText, listChildren, childrenWithTrial, liveTermBookings,
-  pendingHoldsForChild, listWaitlistEntries, PAYMENT_RECEIVED_FLAGS,
+  pendingHoldsForChild, listWaitlistEntries, isInstalmentPlan, PAYMENT_RECEIVED_FLAGS,
 } from '../lib/parent-flow.js';
 
 export const MEDICAL_NOTES_MAX = 2000;
@@ -704,10 +704,12 @@ export async function handleCheckout(req, env) {
 
 // Start the hosted payment for a pending booking and remember its handle.
 // Throws when the provider refuses (callers decide what happens to the hold).
-// `exclusive` (Pay now on an existing booking): the checkout is attached only
-// if no other one was attached meanwhile (a double click) — otherwise it is
-// expired at once and null returned, so two hosted pages can never both take
-// a payment for one booking.
+// `exclusive` (Pay now on an existing booking): the checkout is attached —
+// together with how it pays (in full, or the plan the webhook and the mock
+// checkout read) in the same write — only if no other checkout was attached
+// meanwhile (a double click, a second tab). Otherwise it is expired at once
+// and null returned, so two hosted pages can never both take a payment for
+// one booking, and the plan on record always matches the attached checkout.
 export async function createHostedCheckout(env, {
   bookingId, amountCents, description, user, plan = null, exclusive = false,
 }) {
@@ -726,9 +728,11 @@ export async function createHostedCheckout(env, {
     return checkout.url;
   }
   const attached = await env.DB.prepare(
-    `UPDATE bookings SET payment_provider = ?2, payment_ref = ?3
+    `UPDATE bookings SET payment_provider = ?2, payment_ref = ?3, payment_method = ?4,
+            plan_instalments = ?5, plan_instalment_cents = ?6, plan_interval = ?7
      WHERE id = ?1 AND status = 'pending' AND payment_ref IS NULL`,
-  ).bind(bookingId, driver.name, checkout.checkoutRef).run();
+  ).bind(bookingId, driver.name, checkout.checkoutRef, plan ? 'plan' : 'full',
+    plan ? plan.n : null, plan ? plan.eachCents : null, plan ? plan.interval : null).run();
   if (attached.meta.changes > 0) return checkout.url;
   try {
     await driver.expireCheckout(checkout.checkoutRef);
@@ -865,6 +869,16 @@ export async function backOutOfCheckout(env, booking) {
   if (closed === 'unknown') return 'held';
   const outcome = await abandonCheckout(env, booking.id, booking.payment_ref || null);
   logEvent('booking_backed_out_of_checkout', { booking_id: booking.id.slice(0, 8), outcome });
+  if (outcome === 'detached') {
+    // A held place keeps its seats; an instalment plan chosen for the
+    // abandoned checkout is forgotten (Pay now asks again), so an offline
+    // payment recorded later is never treated as a plan.
+    await env.DB.prepare(
+      `UPDATE bookings SET payment_method = 'full', plan_instalments = NULL, plan_instalment_cents = NULL, plan_interval = NULL
+       WHERE id = ?1 AND status = 'pending' AND payment_ref IS NULL AND payment_method = 'plan'
+         AND stripe_subscription_id IS NULL`,
+    ).bind(booking.id).run();
+  }
   return outcome === 'detached' ? 'kept' : 'released';
 }
 
@@ -924,11 +938,16 @@ export async function handleReleaseCheckout(req, env) {
   const booking = await getOwnedBooking(env, bookingId, user.userId);
   if (!booking) throw notFound();
 
+  // Confirmed, or money already arrived for it (paid with no seat, paid
+  // after cancellation): the confirmation page explains — never "no money
+  // was taken".
+  if (booking.status === 'confirmed' || PAYMENT_RECEIVED_FLAGS.includes(booking.needs_attention) || booking.paid_cents > 0) {
+    return redirect(`/book/confirm?booking=${booking.id}`, 303);
+  }
   const { params } = readCheckoutParams((k) => form.get(k), (k) => form.getAll(k));
   const fromAccount = form.get('from') === 'account';
   const back = fromAccount ? '/account?ok=payment-cancelled' : params ? `/book/checkout?${checkoutQuery(params)}` : '/book';
-  if (booking.status === 'confirmed') return redirect(`/book/confirm?booking=${booking.id}`, 303);
-  if (booking.status !== 'pending') return redirect(back, 303);
+  if (booking.status !== 'pending') return redirect(fromAccount ? '/account' : back, 303);
 
   const outcome = await backOutOfCheckout(env, booking);
   if (outcome === 'paid') return redirect(`/book/confirm?booking=${booking.id}`, 303);
@@ -981,9 +1000,9 @@ function discountLines(booking) {
   return lines.length ? html`<p class="muted">${lines.join(' · ')}</p>` : '';
 }
 
-function planSummaryBlock(booking, instalmentsPaid) {
+function planSummaryBlock(booking, instalmentsPaid, now) {
   const due = booking.amount_cents + booking.credit_cents;
-  const schedule = planScheduleView(booking, instalmentsPaid);
+  const schedule = planScheduleView(booking, instalmentsPaid, now);
   const left = schedule.filter((p) => !p.paid).length;
   return html`
     <p><strong>Paid so far: ${formatAud(booking.paid_cents)} of ${formatAud(due)} AUD</strong></p>
@@ -996,20 +1015,22 @@ function planSummaryBlock(booking, instalmentsPaid) {
 }
 
 // The money part of a confirmed booking's page.
-function paymentSummary(booking, { instalmentsPaid, user }) {
+function paymentSummary(booking, { instalmentsPaid, user, now }) {
   if (booking.kind === 'complimentary' || booking.payment_status === 'waived') {
     return html`<p>Complimentary — nothing to pay.</p>`;
   }
   const flag = booking.needs_attention;
+  const owing = Math.max(0, booking.amount_cents + booking.credit_cents - booking.paid_cents);
+  // (a refund keeps a deliberately refunded booking "paid" — see ledger.js)
+  const settled = booking.payment_status === 'paid' || booking.payment_status === 'plan_complete';
   const parts = [];
-  if (booking.payment_method === 'plan' && booking.plan_instalments) {
-    parts.push(planSummaryBlock(booking, instalmentsPaid));
+  if (isInstalmentPlan(booking)) {
+    parts.push(planSummaryBlock(booking, instalmentsPaid, now));
   } else if (booking.amount_cents === 0) {
     parts.push(html`<p><strong>Nothing to pay</strong>${booking.credit_cents ? ' — covered by your account credit' : ''}.</p>`);
-  } else if (booking.payment_status === 'paid') {
+  } else if (settled) {
     parts.push(html`<p><strong>Paid: ${formatAud(booking.amount_cents)} AUD</strong></p>`);
   } else {
-    const owing = Math.max(0, booking.amount_cents + booking.credit_cents - booking.paid_cents);
     parts.push(html`<p><strong>Still to pay: ${formatAud(owing)} AUD</strong></p>`);
   }
   parts.push(discountLines(booking));
@@ -1065,15 +1086,14 @@ export async function handleConfirmPage(req, env, _params, ctx) {
       const report = reportPurchase(env, req, booking, user).catch((err) => logError('capi_report_failed', err, {}));
       if (ctx && ctx.waitUntil) ctx.waitUntil(report); else await report;
     }
-    const instalmentsPaid = booking.payment_method === 'plan'
-      ? (await ledgerTotals(env, booking.id)).instalments_paid : 0;
+    const instalmentsPaid = isInstalmentPlan(booking) ? (await ledgerTotals(env, booking.id)).instalments_paid : 0;
     body = html`
       <div class="confirm-panel confirm-paid"
         ${track ? html`data-pixel-purchase data-booking-id="${booking.id}" data-amount="${(booking.amount_cents / 100).toFixed(2)}" data-currency="AUD"` : ''}>
         <h1>You're booked in! 🎉</h1>
         <p class="lede">${title} for ${booking.child_name} — we can't wait to see you.</p>
         ${classes}
-        ${paymentSummary(booking, { instalmentsPaid, user })}
+        ${paymentSummary(booking, { instalmentsPaid, user, now })}
         ${booking.kind === 'trial' ? html`<p>After the class we'll email you an offer to join the rest of the term.</p>` : ''}
         <p>A confirmation email is on its way. You can see all your bookings in <a href="/account">your account</a>.</p>
       </div>

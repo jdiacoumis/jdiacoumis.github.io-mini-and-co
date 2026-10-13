@@ -139,14 +139,29 @@ export async function run(ctx) {
   ctx.sqlWrite(`INSERT INTO children (id, user_id, name, dob, created_at) VALUES ('e2e-pf-ivy', '${user.id}', 'Ivy', '2025-10-01', ${NOW})`);
   heldBooking(ctx, { id: 'e2e-pf-held-3', userId: user.id, childId: 'e2e-pf-ivy', termId, days: 3 });
   const third = await ctx.fetch('/account/bookings/e2e-pf-held-3/pay', {
-    method: 'POST', cookie, body: { csrf, payment: 'full', photo_consent: 'yes', medical: '', waiver: 'accepted' },
+    method: 'POST', cookie, body: { csrf, payment: 'plan', photo_consent: 'yes', medical: '', waiver: 'accepted' },
   });
+  ctx.check('the plan choice is recorded with the checkout it belongs to',
+    ctx.sql(`SELECT payment_method FROM bookings WHERE id = 'e2e-pf-held-3'`)[0].payment_method === 'plan');
   const cancelled = await ctx.fetch('/book/cancelled?booking=e2e-pf-held-3', { cookie });
   ctx.check('backing out of a held place keeps it', cancelled.text.includes('No money was taken') && cancelled.text.includes('still held'));
-  const [kept] = ctx.sql(`SELECT status, payment_ref FROM bookings WHERE id = 'e2e-pf-held-3'`);
-  ctx.check('the hold stays, without the abandoned checkout', kept.status === 'pending' && kept.payment_ref === null, JSON.stringify(kept));
+  const [kept] = ctx.sql(`SELECT status, payment_ref, payment_method, plan_instalments FROM bookings WHERE id = 'e2e-pf-held-3'`);
+  ctx.check('the hold stays, without the abandoned checkout or its plan choice',
+    kept.status === 'pending' && kept.payment_ref === null && kept.payment_method === 'full' && kept.plan_instalments === null,
+    JSON.stringify(kept));
   const late = await ctx.fetch('/dev/mock-checkout', { method: 'POST', cookie, body: { csrf, booking: 'e2e-pf-held-3', ref: refOf(third.location), outcome: 'pay' } });
   ctx.check('the abandoned checkout cannot be paid', late.status === 409);
+
+  // A hold with ten minutes left is stretched to cover the half-hour checkout.
+  ctx.sqlWrite(`INSERT INTO children (id, user_id, name, dob, created_at) VALUES ('e2e-pf-juno', '${user.id}', 'Juno', '2025-10-01', ${NOW})`);
+  heldBooking(ctx, { id: 'e2e-pf-held-4', userId: user.id, childId: 'e2e-pf-juno', termId, days: 10 / 1440 });
+  ctx.sqlWrite(`UPDATE bookings SET created_at = ${at(-7)} WHERE id = 'e2e-pf-held-4'`); // a week-long hold in its last minutes
+  const lastMinute = await ctx.fetch('/account/bookings/e2e-pf-held-4/pay', {
+    method: 'POST', cookie, body: { csrf, payment: 'full', photo_consent: 'yes', medical: '', waiver: 'accepted' },
+  });
+  ctx.check('Pay now near the end of a hold keeps the place for the whole checkout',
+    lastMinute.status === 303 && ctx.sql(`SELECT expires_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+34 minutes') AS ok
+                                           FROM bookings WHERE id = 'e2e-pf-held-4'`)[0].ok === 1);
 
   ctx.sqlWrite(`UPDATE bookings SET expires_at = ${at(-0.01)} WHERE id = 'e2e-pf-held-3'`);
   const lapsed = await ctx.fetch('/account/bookings/e2e-pf-held-3/pay', { cookie });
@@ -183,6 +198,9 @@ export async function run(ctx) {
     latePay.text.includes('received your payment') && latePay.text.includes('had been cancelled') && !/no (money|payment) (was|has been) taken/i.test(latePay.text));
   const backOut = await ctx.fetch('/book/cancelled?booking=e2e-pf-noseat', { cookie });
   ctx.check('the cancel page never claims no money was taken for it', backOut.status === 303 && backOut.location === '/book/confirm?booking=e2e-pf-noseat');
+  const releaseIt = await ctx.fetch('/book/checkout/release', { method: 'POST', cookie, body: { csrf, booking: 'e2e-pf-noseat', from: 'account' } });
+  ctx.check('nor does cancelling it from the account', releaseIt.status === 303 && releaseIt.location === '/book/confirm?booking=e2e-pf-noseat',
+    releaseIt.location);
   const flagged = await ctx.fetch('/account', { cookie });
   ctx.check('the account shows the payment was received', (flagged.text.match(/Payment received<\/strong> — Camila will be in touch/g) || []).length === 2);
   ctx.sqlWrite(`INSERT INTO bookings (id, user_id, child_id, kind, term_id, status, list_amount_cents, amount_cents, paid_cents,

@@ -9,8 +9,10 @@
 
 import { html, joinHtml } from '../html.js';
 import { formatSydney } from '../time.js';
+import { nowIso } from '../db.js';
 import { formatAud, KIND_LABELS } from '../domain.js';
 import { instalmentSchedule } from '../pricing.js';
+import { isInstalmentPlan } from '../parent-flow.js';
 
 const SIGN_OFF = ['Warmly,', 'Camila — Mini & Co. Sensory Classes'];
 
@@ -33,7 +35,10 @@ function bookingTitle(booking) {
 
 // The money part of the confirmation: { lines (plain text), schedule
 // ([{ label, amount }] for a plan, else []), after (lines after the schedule) }.
-function paymentParts(booking) {
+// Instalment dates run from the first payment — or from now, the moment of
+// confirmation, if that payment's record has not arrived yet (never from when
+// the booking was created: a held place may be paid for days later).
+function paymentParts(booking, now) {
   if (booking.kind === 'complimentary' || booking.payment_status === 'waived') {
     return { lines: ['This booking is complimentary — nothing to pay.'], schedule: [], after: [] };
   }
@@ -43,10 +48,10 @@ function paymentParts(booking) {
   }
   if (booking.credit_cents > 0) extras.push(`Account credit used: ${formatAud(booking.credit_cents)}`);
 
-  if (booking.payment_method === 'plan' && booking.plan_instalments && booking.amount_cents > 0) {
+  if (isInstalmentPlan(booking) && booking.amount_cents > 0) {
     const schedule = instalmentSchedule(
       booking.amount_cents, booking.plan_instalments, booking.plan_interval || 'week',
-      booking.paid_at || booking.created_at,
+      booking.paid_at || now,
     );
     const cadence = schedule.interval === 'fortnight' ? 'fortnightly' : 'weekly';
     return {
@@ -73,17 +78,17 @@ function paymentParts(booking) {
       after: [],
     };
   }
-  const first = booking.payment_status === 'paid'
+  const first = booking.payment_status === 'paid' || booking.payment_status === 'plan_complete'
     ? `Paid: ${formatAud(booking.amount_cents)} AUD.`
     : `Total: ${formatAud(booking.amount_cents)} AUD.`;
   return { lines: [first, ...extras], schedule: [], after: [] };
 }
 
-export function bookingConfirmationEmail({ booking, env }) {
+export function bookingConfirmationEmail({ booking, env, now = nowIso() }) {
   const accountUrl = `${env.PUBLIC_BASE_URL}/account`;
   const sessions = (booking.sessions || []).map((s) => `${formatSydney(s.starts_at)} (${s.duration_mins} min)`);
   const venues = [...new Set((booking.sessions || []).map((s) => s.venue).filter(Boolean))];
-  const pay = paymentParts(booking);
+  const pay = paymentParts(booking, now);
   const subject = `Booking confirmed — see you soon, ${booking.child_name}!`;
   const intro = `${booking.child_name}'s booking is confirmed: ${bookingTitle(booking)}.`;
   const classesHeading = sessions.length === 1 ? 'Your class:' : `Your classes (${sessions.length}):`;

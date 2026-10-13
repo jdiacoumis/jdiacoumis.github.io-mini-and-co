@@ -144,6 +144,13 @@ export async function run(ctx) {
     entry(ctx, bo.childId)[0].status === 'declined' && ctx.sql(`SELECT status FROM bookings WHERE id = 'e2e-pf-offer-bo'`)[0].status === 'expired');
   ctx.check('the owner is told the place is free again',
     (await ctx.mailbox(OWNER)).some((m) => m.subject.includes('Waitlist place declined') && m.body.includes("Bo's family")));
+  // An entry settled by an offer of a trial (no term place) may join again
+  // (the term is full again: the seat opened for the offer is withdrawn).
+  ctx.sqlWrite(`UPDATE class_sessions SET capacity = 1 WHERE term_id = '${TERM}'`);
+  ctx.sqlWrite(`UPDATE waitlist SET status = 'booked' WHERE term_id = '${TERM}' AND child_id = '${bo.childId}'`);
+  const boBack = await ctx.fetch('/book/waitlist', { method: 'POST', cookie: bo.cookie, body: { csrf: bo.csrf, term: TERM, child: bo.childId } });
+  ctx.check('a child whose earlier entry was settled without a term place can join again',
+    boBack.location.endsWith('ok=joined') && entry(ctx, bo.childId)[0].status === 'waiting', boBack.location);
 
   offer(ctx, ada, 'e2e-pf-offer-ada');
   const pay = await ctx.fetch('/account/bookings/e2e-pf-offer-ada/pay', {
