@@ -6,7 +6,7 @@ Local-only staging area for raw photographic originals (before optimisation).
 
 - This directory's contents are **gitignored**, except for this `README.md`.
 - Drop raw originals (`*.jpg`, `*.jpeg`, `*.png`) at the **top level** of this directory. The slug used in published filenames is the source filename's stem — e.g. `camila.jpg` → `camila-1200.webp`.
-- Run `python3 scripts/optimise-photos.py` from the repo root. It produces six outputs per source — `<slug>-{600,1200,1600}.{jpg,webp}` — into `assets/photos/`. Those outputs **are** tracked in git.
+- Run `python3 scripts/optimise-photos.py` from the repo root. It produces up to six outputs per source — `<slug>-{600,1200,1600}.{jpg,webp}` — into `assets/photos/`. A target width is skipped when a smaller one already covers the full source width (a 1024px-wide "Web Size" original therefore yields just the 600 and 1200 variants). Those outputs **are** tracked in git.
 - **Subdirectories are not auto-published.** They serve as a holding area for shots that aren't yet ready. To publish a photo from a subdirectory, move it up to this directory's top level, then re-run the optimiser.
 
 ## Why originals are not tracked

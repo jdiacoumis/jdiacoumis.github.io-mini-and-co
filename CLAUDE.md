@@ -21,9 +21,11 @@ Asset exports (require `cairosvg`, `pillow`, and `segno` — `cairosvg`/`pillow`
 ```bash
 python3 scripts/export-banner.py            # 850×2000mm pull-up banner → assets/banner/banner.png
 python3 scripts/export-banner.py --dpi 200  # higher-res override
+python3 scripts/export-banner.py --print-size 841x2055 --dpi 300  # print-spec canvas only (Officeworks) → assets/banner/banner-print-841x2055.png
 python3 scripts/export-flyer.py             # A4 portrait flyer → assets/flyer/flyer.{svg,png}
 python3 scripts/export-flyer.py --dpi 300   # higher-res override (default 200)
 python3 scripts/export-logo.py              # Instagram tile variants → assets/logo/instagram/
+python3 scripts/export-ebook.py             # A5 "Play at Home" booklet (HTML → headless Chromium) → assets/ebook/play-at-home.pdf
 python3 scripts/optimise-photos.py          # photos-staging/*.{jpg,jpeg,png} → assets/photos/<slug>-<width>.{jpg,webp}
 python3 scripts/optimise-photos.py --force  # re-export every photo regardless of mtime
 ```
@@ -52,7 +54,7 @@ All design tokens live as CSS custom properties at the top of [css/styles.css](c
 
 `assets/banner/banner.svg` and `assets/logo/logo.svg` are the editable source files. The PNGs (`banner.png`, `logo/instagram/*.png`) are **generated** — regenerate via the scripts in `scripts/`, do not hand-edit. The logo export composites coloured backgrounds and recolours the plum hex by string-replacement, so any palette change there must match `--colour-text`.
 
-Photographic assets follow a different convention. Raw originals live locally in [photos-staging/](photos-staging/) (gitignored except for the README). Run `python3 scripts/optimise-photos.py` to turn each top-level `*.jpg`/`*.jpeg`/`*.png` into six tracked outputs at `assets/photos/<slug>-{600,1200,1600}.{jpg,webp}` — JPG quality 82, WebP quality 80, width-based resize with no upscale. The optimiser is idempotent (skips outputs newer than the source); `--force` reprocesses everything. Subdirectories of `photos-staging/` are intentionally skipped so they can act as a "not yet ready" holding area. Pillow is the only new Python dep and is installed by `post-create.sh`.
+Photographic assets follow a different convention. Raw originals live locally in [photos-staging/](photos-staging/) (gitignored except for the README). Run `python3 scripts/optimise-photos.py` to turn each top-level `*.jpg`/`*.jpeg`/`*.png` into up to six tracked outputs at `assets/photos/<slug>-{600,1200,1600}.{jpg,webp}` — JPG quality 82, WebP quality 80, width-based resize with no upscale. A target width is skipped when a smaller one already covers the full source width (so a 1024px-wide source yields only the 600 and 1200 variants, not byte-identical 1600 duplicates). The optimiser is idempotent (skips outputs newer than the source); `--force` reprocesses everything. Subdirectories of `photos-staging/` are intentionally skipped so they can act as a "not yet ready" holding area. Pillow is the only new Python dep and is installed by `post-create.sh`.
 
 ## OpenSpec workflow
 

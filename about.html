@@ -41,6 +41,9 @@
     'https://connect.facebook.net/en_US/fbevents.js');
     fbq('init', '1991468878409217');
     fbq('track', 'PageView', {}, {eventID: crypto.randomUUID()});
+    function trackLead() {
+      if (window.fbq) fbq('track', 'Lead', {}, {eventID: crypto.randomUUID()});
+    }
   </script>
   <noscript><img height="1" width="1" style="display:none"
     src="https://www.facebook.com/tr?id=1991468878409217&amp;ev=PageView&amp;noscript=1" alt=""></noscript>
@@ -94,17 +97,15 @@
         <div class="bio">
           <picture class="bio__photo">
             <source type="image/webp"
-                    srcset="assets/photos/camila-600.webp 600w,
-                            assets/photos/camila-1200.webp 1200w,
-                            assets/photos/camila-1600.webp 1600w"
+                    srcset="assets/photos/camila-in-studio-600.webp 600w,
+                            assets/photos/camila-in-studio-1200.webp 1024w"
                     sizes="(min-width: 720px) 40vw, 100vw">
-            <img src="assets/photos/camila-1200.jpg"
-                 srcset="assets/photos/camila-600.jpg 600w,
-                         assets/photos/camila-1200.jpg 1200w,
-                         assets/photos/camila-1600.jpg 1600w"
+            <img src="assets/photos/camila-in-studio-1200.jpg"
+                 srcset="assets/photos/camila-in-studio-600.jpg 600w,
+                         assets/photos/camila-in-studio-1200.jpg 1024w"
                  sizes="(min-width: 720px) 40vw, 100vw"
-                 alt="Camila, smiling, holding a notebook in a softly lit studio"
-                 width="1200" height="1800"
+                 alt="Camila sits on the timber studio floor with a basket of soft knitted toys in her lap, smiling gently, framed between the soft-play blocks and the ball pit"
+                 width="1024" height="1536"
                  loading="lazy" decoding="async">
           </picture>
           <div class="bio__body">
@@ -120,8 +121,8 @@
     <section class="cta-band">
       <div class="container container-narrow">
         <h2>Come and see what calm feels like.</h2>
-        <p class="lede">Wednesday classes are open to book — pick a time that suits and come along.</p>
-        <a class="button" href="/book/">Book now</a>
+        <p class="lede">Term 4 is fully booked. Tap Book now to join the waitlist and we'll be in touch if a place opens up.</p>
+        <a class="button" href="https://mini-co-sensory.classforkids.io" target="_blank" rel="noopener" onclick="trackLead();">Book now</a>
       </div>
     </section>
 
