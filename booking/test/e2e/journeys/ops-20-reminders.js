@@ -58,18 +58,39 @@ export async function run(ctx) {
                   ('${id}-b', 'ops-rem-cx', 'booked')`);
   }
   const reminders = (email) => ctx.sql(`SELECT COUNT(*) AS n FROM dev_emails WHERE to_email = '${email}' AND subject LIKE 'Reminder:%'`)[0].n;
-  const settle = () => new Promise((r) => setTimeout(r, 1500)); // scheduled() runs its jobs in waitUntil
+
+  // scheduled() runs its jobs in waitUntil, after the HTTP response. To know a
+  // run has finished, plant a waitlist entry whose offer is already paid:
+  // reconcileWaitlist — the last job — marks it booked. (The sentinel booking
+  // has no sessions, so it never gets a reminder itself.)
+  ctx.sqlWrite(`INSERT INTO users (id, email, created_at) VALUES ('ops-rem-sentinel-u', 'e2e-ops-rem-sentinel@example.com', ${NOW})`);
+  ctx.sqlWrite(`INSERT INTO children (id, user_id, name, dob, created_at) VALUES
+                ('ops-rem-sentinel-c1', 'ops-rem-sentinel-u', 'Sentinel 1', '2026-03-03', ${NOW}),
+                ('ops-rem-sentinel-c2', 'ops-rem-sentinel-u', 'Sentinel 2', '2026-03-03', ${NOW}),
+                ('ops-rem-sentinel-c3', 'ops-rem-sentinel-u', 'Sentinel 3', '2026-03-03', ${NOW})`);
+  ctx.sqlWrite(`INSERT INTO bookings (id, user_id, child_id, kind, term_id, status, amount_cents, created_at)
+                VALUES ('ops-rem-sentinel-b', 'ops-rem-sentinel-u', 'ops-rem-sentinel-c1', 'casual', '${TERM}', 'confirmed', 0, ${NOW})`);
+  let runs = 0;
+  const cronRun = async () => {
+    runs += 1;
+    const id = `ops-rem-sentinel-${runs}`;
+    ctx.sqlWrite(`INSERT INTO waitlist (id, term_id, user_id, child_id, status, joined_at, offer_booking_id)
+                  VALUES ('${id}', '${TERM}', 'ops-rem-sentinel-u', 'ops-rem-sentinel-c${runs}', 'offered', ${NOW}, 'ops-rem-sentinel-b')`);
+    const status = await ctx.runCron();
+    const finished = await waitFor(() => ctx.sql(`SELECT status FROM waitlist WHERE id = '${id}'`)[0].status === 'booked');
+    return { status, finished };
+  };
 
   ctx.section('Five days out: nothing yet');
-  await ctx.runCron();
-  await settle();
+  const first = await cronRun();
+  ctx.check('the scheduled jobs run to the end', first.status === 200 && first.finished, `HTTP ${first.status}`);
   ctx.check('no reminder five days ahead', reminders(PAID) === 0);
 
   ctx.section('Moved to tomorrow');
   ctx.sqlWrite(`UPDATE class_sessions SET starts_at = ${inHours(24)} WHERE id = 'ops-rem-s1'`);
-  const status = await ctx.runCron();
-  ctx.check('the scheduled handler runs', status === 200, `HTTP ${status}`);
-  ctx.check('the paid family gets one reminder', await waitFor(() => reminders(PAID) === 1), `${reminders(PAID)} reminders`);
+  const second = await cronRun();
+  ctx.check('the scheduled jobs run again', second.status === 200 && second.finished, `HTTP ${second.status}`);
+  ctx.check('the paid family gets one reminder', reminders(PAID) === 1, `${reminders(PAID)} reminders`);
   const [mail] = await ctx.mailbox(PAID);
   ctx.check("the reminder names the child, the venue and the class time",
     mail.subject.startsWith("Reminder: Remy's class on") && mail.body.includes('Oran Park Library — Sandown Room')
@@ -77,9 +98,8 @@ export async function run(ctx) {
   ctx.check('it is logged with its dedupe key',
     ctx.sql(`SELECT COUNT(*) AS n FROM email_log WHERE dedupe_key = 'reminder:ops-rem-s1:ops-rem-paid-b' AND status = 'sent'`)[0].n === 1);
 
-  await ctx.runCron();
-  await settle();
-  ctx.check('running the job again sends nothing new', reminders(PAID) === 1);
+  const third = await cronRun();
+  ctx.check('running the job again sends nothing new', third.finished && reminders(PAID) === 1);
   ctx.check('an unpaid hold gets no reminder', reminders(UNPAID) === 0);
   ctx.check('a cancelled week gets no reminder', reminders(SKIPPED_WEEK) === 0);
   ctx.check('a cancelled session gets no reminder',

@@ -110,7 +110,8 @@ async function loadEntries(env, termIds) {
   if (!termIds.length) return [];
   const placeholders = termIds.map((_, i) => `?${i + 1}`).join(', ');
   return (await env.DB.prepare(
-    `${ENTRY_SELECT} WHERE w.term_id IN (${placeholders}) ORDER BY w.joined_at, w.id`,
+    // joined_at has second precision: rowid (insertion order) breaks ties.
+    `${ENTRY_SELECT} WHERE w.term_id IN (${placeholders}) ORDER BY w.joined_at, w.rowid`,
   ).bind(...termIds).all()).results || [];
 }
 

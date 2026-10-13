@@ -255,6 +255,19 @@ test('every waitlist route is admin-only, and every POST needs the CSRF token', 
   assert.equal((await loadEntry(env, 'wr-1')).status, 'waiting', 'nothing changed');
 });
 
+test('families who join in the same second are listed in the order they were added', async () => {
+  const fam = await seedFamilyAndTerm(env, { prefix: 'ws', children: 2 });
+  await run(`UPDATE children SET name = 'First Added' WHERE id = ?1`, fam.childIds[0]);
+  await run(`UPDATE children SET name = 'Second Added' WHERE id = ?1`, fam.childIds[1]);
+  const sameSecond = iso(Date.now());
+  await entry('zz-ws-first', fam, 0, { joinedAt: sameSecond });
+  await entry('aa-ws-second', fam, 1, { joinedAt: sameSecond });
+  const admin = await account('owner@example.com');
+  const page = routes.find((r) => r.method === 'GET' && r.pattern === '/admin/waitlist');
+  const body = await (await page.handler(request('GET', `/admin/waitlist?term=${fam.termId}`, { cookie: admin.cookie }), env, {})).text();
+  assert.ok(body.indexOf('First Added') > 0 && body.indexOf('First Added') < body.indexOf('Second Added'));
+});
+
 test('the waitlist page lists entries in join order, escaped, with offer and message links', async () => {
   const fam = await seedFamilyAndTerm(env, { prefix: 'wv', children: 2 });
   await run(`UPDATE children SET name = '<script>alert(1)</script>' WHERE id = ?1`, fam.childIds[1]);
