@@ -147,7 +147,7 @@ export function cronRunner(ctx, key) {
   const term = `x-cron-${key}-t`;
   ctx.sqlWrite(`INSERT INTO users (id, email, created_at) VALUES (${q(user)}, ${q(`x-cron-${key}@example.com`)}, ${NOW})`);
   ctx.sqlWrite(`INSERT INTO terms (id, class_id, name, starts_on, ends_on, term_price_cents, casual_price_cents, status, created_at)
-                VALUES (${q(term)}, 'cls-wed-11', 'X cron sentinel', date('now'), date('now'), 0, 0, 'draft', ${NOW})`);
+                VALUES (${q(term)}, 'cls-wed-11', ${q(`X cron sentinel ${key}`)}, date('now'), date('now'), 0, 0, 'draft', ${NOW})`);
   ctx.sqlWrite(`INSERT INTO children (id, user_id, name, dob, created_at) VALUES (${q(`${user}-c0`)}, ${q(user)}, 'Sentinel', '2026-01-01', ${NOW})`);
   ctx.sqlWrite(`INSERT INTO bookings (id, user_id, child_id, kind, term_id, status, amount_cents, created_at)
                 VALUES (${q(`${user}-b`)}, ${q(user)}, ${q(`${user}-c0`)}, 'complimentary', ${q(term)}, 'confirmed', 0, ${NOW})`);

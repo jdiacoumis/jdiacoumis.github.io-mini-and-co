@@ -120,3 +120,55 @@ export async function seedFamilyAndTerm(env, {
   }
   return { userId, childId: childIds[0], childIds, classId, termId, sessionIds };
 }
+
+// --- Route-level helpers ------------------------------------------------------
+
+// A signed-in account (a web session minted directly): { userId, cookie, csrf }.
+// ADMIN_EMAILS / STAFF_EMAILS in DEV_VARS decide what the address may do.
+export async function signedIn(env, email, { name = '' } = {}) {
+  const { createSession } = await import('../../src/lib/session.js');
+  const userId = `acct-${email}`;
+  await env.DB.prepare(`INSERT OR IGNORE INTO users (id, email, name, created_at) VALUES (?1, ?2, ?3, ?4)`)
+    .bind(userId, email, name, iso(Date.now())).run();
+  const row = await env.DB.prepare(`SELECT id FROM users WHERE email = ?1`).bind(email).first();
+  const session = await createSession(env, row.id);
+  return { userId: row.id, cookie: `session=${session.sessionId}`, csrf: session.csrfToken };
+}
+
+// A same-origin request as the browser would send it (form-encoded POST).
+//   form: object | [[name, value], …] (repeat a name for several values)
+export function formRequest(method, path, { cookie = null, form = null, headers = {} } = {}) {
+  const h = { ...headers };
+  if (cookie) h.Cookie = cookie;
+  let body;
+  if (form) {
+    h['Content-Type'] = 'application/x-www-form-urlencoded';
+    const params = new URLSearchParams();
+    for (const [k, v] of Array.isArray(form) ? form : Object.entries(form)) {
+      if (Array.isArray(v)) for (const x of v) params.append(k, String(x));
+      else if (v !== undefined && v !== null) params.append(k, String(v));
+    }
+    body = params.toString();
+  }
+  return new Request(`http://localhost:8787${path}`, { method, headers: h, body });
+}
+
+// Run a route handler: thrown redirects (Response) and HttpErrors come back
+// as values, like the router renders them.
+export async function outcome(promise) {
+  try {
+    return await promise;
+  } catch (err) {
+    if (err instanceof Response || (err && typeof err.status === 'number' && 'publicMessage' in err)) return err;
+    throw err;
+  }
+}
+
+// The handler a route module registers for (method, pattern).
+export function routeHandler(module, method, pattern) {
+  const routes = [];
+  module.registerRoutes((m, p, handler) => routes.push({ m, p, handler }));
+  const found = routes.find((r) => r.m === method && r.p === pattern);
+  if (!found) throw new Error(`no route ${method} ${pattern}`);
+  return found.handler;
+}

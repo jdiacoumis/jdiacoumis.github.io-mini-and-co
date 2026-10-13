@@ -19,7 +19,7 @@
 import { html, pageResponse, csrfField, joinHtml } from '../lib/html.js';
 import { requireAdmin, requireCsrf, parseForm } from '../lib/middleware.js';
 import { redirect, notFound } from '../lib/http.js';
-import { uuid, nowIso } from '../lib/db.js';
+import { uuid, nowIso, isConstraintError } from '../lib/db.js';
 import { isValidId, cleanText, parseIntInRange } from '../lib/validate.js';
 import { formatSydney, sydneyFields, sydneyToUtc } from '../lib/time.js';
 import { loadTerm, listTermSessions, formatAud } from '../lib/domain.js';
@@ -36,6 +36,10 @@ import {
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const STATUS_LABELS = { draft: 'Draft', open: 'Open for bookings', closed: 'Closed' };
+// The database allows one term name per class (migration 0003): a clash that
+// got past termNameTaken — a double click, two tabs — lands here.
+const NAME_CLASH = (name) => `A term called “${name}” already exists for this class — it may have just been created
+  (a double click?). Check the Terms list before trying again.`;
 const TERM_STATUSES = ['draft', 'open', 'closed'];
 const MAX_TERM_PRICE_CENTS = 1000000;
 const MAX_CASUAL_PRICE_CENTS = 100000;
@@ -512,7 +516,13 @@ export async function handleAdminTermNewPost(req, env) {
     });
   }
 
-  const ids = await createTermsWithSessions(env, specs);
+  let ids;
+  try {
+    ids = await createTermsWithSessions(env, specs);
+  } catch (err) {
+    if (!isConstraintError(err)) throw err;
+    return newTermPage(env, user, values, { error: NAME_CLASH(values.name), status: 409 });
+  }
   logEvent('term_created_by_admin', { terms: ids.length, by: user.userId.slice(0, 8) });
   return redirect(`/admin/terms/${ids[0]}?ok=${ids.length > 1 ? 'terms-created' : 'term-created'}`, 303);
 }
@@ -735,7 +745,12 @@ export async function handleAdminTermEditPost(req, env, params) {
       `UPDATE class_sessions SET casual_price_cents = ?2 WHERE term_id = ?1 AND status = 'scheduled' AND starts_at > ?3`,
     ).bind(term.id, parsed.casualPriceCents, now));
   }
-  await env.DB.batch(statements);
+  try {
+    await env.DB.batch(statements);
+  } catch (err) {
+    if (!isConstraintError(err)) throw err;
+    return editTermPage(env, user, term, values, { error: NAME_CLASH(values.name), status: 409 });
+  }
   logEvent('term_updated', { term_id: term.id.slice(0, 8), by: user.userId.slice(0, 8) });
   return redirect(`/admin/terms/${term.id}?ok=term-updated`, 303);
 }
@@ -858,25 +873,31 @@ export async function handleAdminTermRerunPost(req, env, params) {
   if (await termNameTaken(env, source.class_id, values.name)) {
     return rerunPage(env, user, source, values, { error: `This class already has a term called “${values.name}”.`, status: 400 });
   }
-  const [termId] = await createTermsWithSessions(env, [{
-    classId: source.class_id,
-    name: values.name,
-    startsOn: plan.startsOn,
-    endsOn: plan.endsOn,
-    termPriceCents: parsed.termPriceCents,
-    casualPriceCents: parsed.casualPriceCents,
-    trialPriceCents: parsed.trialPriceCents,
-    returningPriceCents: parsed.returningPriceCents,
-    returningOpensAt: parsed.returningOpensAt,
-    publicOpensAt: parsed.publicOpensAt,
-    previousTermId: source.id,
-    planInstalments: parsed.planInstalments,
-    planInterval: parsed.planInterval,
-    status: 'draft',
-    sessions: sessionStartsFor(plan.dates, source.start_time),
-    durationMins: source.default_duration_mins,
-    capacity: source.default_capacity,
-  }]);
+  let termId;
+  try {
+    [termId] = await createTermsWithSessions(env, [{
+      classId: source.class_id,
+      name: values.name,
+      startsOn: plan.startsOn,
+      endsOn: plan.endsOn,
+      termPriceCents: parsed.termPriceCents,
+      casualPriceCents: parsed.casualPriceCents,
+      trialPriceCents: parsed.trialPriceCents,
+      returningPriceCents: parsed.returningPriceCents,
+      returningOpensAt: parsed.returningOpensAt,
+      publicOpensAt: parsed.publicOpensAt,
+      previousTermId: source.id,
+      planInstalments: parsed.planInstalments,
+      planInterval: parsed.planInterval,
+      status: 'draft',
+      sessions: sessionStartsFor(plan.dates, source.start_time),
+      durationMins: source.default_duration_mins,
+      capacity: source.default_capacity,
+    }]);
+  } catch (err) {
+    if (!isConstraintError(err)) throw err;
+    return rerunPage(env, user, source, values, { error: NAME_CLASH(values.name), status: 409 });
+  }
   logEvent('term_rerun', { from: source.id.slice(0, 8), term_id: termId.slice(0, 8), by: user.userId.slice(0, 8) });
   return redirect(`/admin/terms/${termId}/auto-enrol?ok=rerun-created`, 303);
 }
