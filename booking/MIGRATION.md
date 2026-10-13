@@ -111,9 +111,11 @@ booking in the term before. To give Term 4 families that status:
    will list them. These families will also get this system's day-before
    reminder for those weeks, so import in the final week (or tell them to
    expect it).
-3. **Terms → Term 4 2026 → Re-run term** to create Term 1 2027 from it (check
-   the first class date — the copy starts two empty weeks after Term 4 — and set
-   the prices, returning price and opening times) → **Create the new term**,
+3. **Terms → Term 4 2026 → Re-run term** to create Term 1 2027 from it. Set
+   the **first class date** and **number of weeks** yourself: the copy starts
+   two empty weeks after Term 4 and is only as long as the Term 4 you created
+   (just its last weeks). Then set the prices, returning price and opening
+   times → **Create the new term**,
    then **Hold places and send invitations** for the ticked families: each
    Term 4 family gets a place held at the returning price until public opening
    (or 7 days) and the email "<child>'s place in Term 1 2027 is saved — pay by
