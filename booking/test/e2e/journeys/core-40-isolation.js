@@ -69,7 +69,9 @@ export async function run(ctx) {
   ctx.check('attendance requires CSRF', attendanceNoCsrf.status === 403);
   ctx.check('a parent may not post attendance',
     (await ctx.fetch('/admin/sessions/ses-11-w2/attendance', { method: 'POST', cookie: stranger, body: { csrf: strangerCsrf } })).status === 403);
-  for (const path of ['/admin', '/admin/bookings', '/admin/terms', '/admin/customers']) {
+  const staffHome = await ctx.fetch('/admin', { cookie: staff });
+  ctx.check('staff opening /admin land on their rosters page', staffHome.status === 303 && staffHome.location === '/admin/rosters');
+  for (const path of ['/admin/bookings', '/admin/terms', '/admin/customers']) {
     ctx.check(`staff denied ${path}`, (await ctx.fetch(path, { cookie: staff })).status === 403);
   }
   const csv = await ctx.fetch('/admin/sessions/ses-11-w2/roster.csv', { method: 'POST', cookie: staff, body: { csrf: staffCsrf } });

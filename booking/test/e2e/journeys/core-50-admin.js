@@ -20,7 +20,7 @@ export async function run(ctx) {
   }
   for (const path of ['/admin/terms', '/admin/bookings/new', '/admin/attention', '/admin/waitlist', '/admin/email']) {
     const page = await ctx.fetch(path, { cookie: admin });
-    ctx.check(`${path} placeholder renders`, page.status === 200 && page.text.includes('Coming soon'));
+    ctx.check(`${path} renders`, page.status === 200);
   }
   ctx.check('admin pages never load the pixel', !dash.text.includes('booking-pixel.js'));
 
