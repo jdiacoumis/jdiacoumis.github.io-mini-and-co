@@ -1,22 +1,28 @@
-// Admin portal: dashboard, class and session management, per-session rosters.
+// Admin portal: schedule dashboard, classes (weekly slots), sessions, rosters.
+// Phase 2B owns this file (term grid links, attendance, roster consent view).
 //
-// Security: every handler starts with requireAdmin (server-side role re-check
-// on each request, denials logged and rate limited); all state changes verify
-// the per-session CSRF token; CSV exports are POST + CSRF and neutralise
-// formula injection (lib/csv.js). Times are entered and rendered in
-// Australia/Sydney and stored as UTC.
+// Security: every handler starts with requireAdmin — or requireStaff for the
+// roster, the one page a facilitator may open (live allowlist re-check on each
+// request, denials logged and rate limited); all state changes verify the
+// per-session CSRF token; CSV exports are POST + CSRF, admin-only, and
+// neutralise formula injection (lib/csv.js). Times are entered and rendered
+// in Australia/Sydney and stored as UTC.
 
 import { html, pageResponse, csrfField, joinHtml } from '../lib/html.js';
-import { requireAdmin, requireCsrf, parseForm } from '../lib/middleware.js';
-import { redirect, notFound, badRequest } from '../lib/http.js';
+import { requireAdmin, requireStaff, requireCsrf, parseForm } from '../lib/middleware.js';
+import { redirect, notFound } from '../lib/http.js';
 import { uuid, nowIso } from '../lib/db.js';
 import { isValidId, cleanText, parseIntInRange, parseDollarsToCents } from '../lib/validate.js';
 import { sydneyToUtc, formatSydney, sydneyFields, formatAge } from '../lib/time.js';
-import { listSessionsWithFullness, formatAud, sweepExpiredBookings } from '../lib/domain.js';
+import {
+  listSessionsWithFullness, formatAud, sweepExpiredBookings, holdsSeatSql, KIND_LABELS,
+  PAYMENT_STATUS_LABELS,
+} from '../lib/domain.js';
 import { csvResponse } from '../lib/csv.js';
 import { logEvent } from '../lib/log.js';
 
 const MAX_REPEAT_WEEKS = 52;
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 // Post-redirect-get notices, allowlisted by key so nothing user-controlled is
 // ever reflected from the query string.
@@ -25,24 +31,12 @@ const NOTICES = {
   'class-updated': 'Class updated.',
   'sessions-created': 'Session(s) created.',
   'session-updated': 'Session updated.',
+  'attendance-soon': 'Attendance marking is coming soon.',
 };
 
 function notice(req) {
-  const key = new URL(req.url).searchParams.get('ok');
-  const text = NOTICES[key];
+  const text = NOTICES[new URL(req.url).searchParams.get('ok')];
   return text ? html`<p class="form-notice" role="status">${text}</p>` : html``;
-}
-
-export function adminNav() {
-  return html`
-    <nav class="admin-nav">
-      <a href="/admin">Schedule</a>
-      <a href="/admin/classes">Classes</a>
-      <a href="/admin/bookings">Bookings</a>
-      <a href="/admin/customers">Customers</a>
-      <a href="/admin/import">Import</a>
-    </nav>
-  `;
 }
 
 // Calendar-safe date addition on a YYYY-MM-DD string (UTC arithmetic on the
@@ -53,28 +47,39 @@ function addDays(dateStr, days) {
   return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
 }
 
-// GET /admin[?class=…&term=…] — dashboard: upcoming sessions in
-// chronological order with fullness (confirmed + unexpired pending) out of
-// capacity, optionally filtered to one class/term (linked from Classes).
+async function listAllClasses(env) {
+  return (await env.DB.prepare(
+    `SELECT id, name, active, weekday, start_time, default_duration_mins, default_capacity
+     FROM classes ORDER BY active DESC, name`,
+  ).all()).results || [];
+}
+
+async function listAllTerms(env) {
+  return (await env.DB.prepare(
+    `SELECT t.id, t.class_id, t.name, t.status, t.starts_on, t.ends_on, t.casual_price_cents, c.name AS class_name
+     FROM terms t JOIN classes c ON c.id = t.class_id
+     ORDER BY t.starts_on DESC, c.name`,
+  ).all()).results || [];
+}
+
+// GET /admin[?class=…&term=…] — upcoming sessions in date order with seats
+// held (confirmed + unexpired pending) out of capacity.
 export async function handleAdminDashboard(req, env) {
   const user = await requireAdmin(req, env);
   await sweepExpiredBookings(env);
 
   const url = new URL(req.url);
   const classFilter = isValidId(url.searchParams.get('class') || '') ? url.searchParams.get('class') : null;
-  const termFilter = cleanText(url.searchParams.get('term'), 50) || null;
-
-  let sessions = await listSessionsWithFullness(env, { upcomingOnly: true });
-  if (classFilter) sessions = sessions.filter((s) => s.class_id === classFilter);
-  if (termFilter) sessions = sessions.filter((s) => (s.term_label || '') === termFilter);
+  const termFilter = isValidId(url.searchParams.get('term') || '') ? url.searchParams.get('term') : null;
+  const sessions = await listSessionsWithFullness(env, { upcomingOnly: true, classId: classFilter, termId: termFilter });
 
   const rows = sessions.map((s) => html`
     <tr class="${s.status === 'cancelled' ? 'row-cancelled' : ''}">
       <td><a href="/admin/sessions/${s.id}/roster">${formatSydney(s.starts_at)}</a></td>
       <td>${s.class_name}${s.class_active ? '' : ' (class inactive)'}</td>
-      <td>${s.term_label || '—'}</td>
+      <td>${s.term_name || 'One-off'}</td>
       <td>${s.seats_held}/${s.capacity}</td>
-      <td>${formatAud(s.price_cents)}</td>
+      <td>${formatAud(s.casual_price_cents)}</td>
       <td>${s.status === 'cancelled' ? 'Cancelled' : 'Scheduled'}</td>
       <td class="table-actions"><a href="/admin/sessions/${s.id}/edit">Edit</a></td>
     </tr>
@@ -82,32 +87,31 @@ export async function handleAdminDashboard(req, env) {
 
   const body = html`
     <h1>Admin</h1>
-    ${adminNav()}
     ${notice(req)}
     <h2>Upcoming sessions</h2>
-    ${classFilter || termFilter ? html`
-      <p class="form-notice">Filtered${termFilter ? html` to ${termFilter}` : ''} — <a href="/admin">show everything</a></p>
-    ` : ''}
+    ${classFilter || termFilter ? html`<p class="form-notice">Filtered — <a href="/admin">show everything</a></p>` : ''}
     ${rows.length ? html`
       <table class="booking-table">
-        <thead><tr><th>When (Sydney)</th><th>Class</th><th>Term</th><th>Seats</th><th>Price</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>When (Sydney)</th><th>Class</th><th>Term</th><th>Seats</th><th>Casual price</th><th>Status</th><th></th></tr></thead>
         <tbody>${joinHtml(rows)}</tbody>
       </table>
     ` : html`<p>No upcoming sessions${classFilter || termFilter ? ' match this filter' : ''}. <a href="/admin/sessions/new">Create some</a>.</p>`}
     <p><a href="/admin/sessions/new" class="button-link">Add sessions</a></p>
   `;
-  return pageResponse('Admin', body, { user });
+  return pageResponse('Admin', body, { user, admin: true });
 }
 
 // --- Classes -----------------------------------------------------------------
 
 function classForm({ action, values, error = '', csrfToken, submitLabel, showActive = false }) {
+  const weekdayOptions = [html`<option value="" ${values.weekday === '' ? 'selected' : ''}>Not set</option>`]
+    .concat(WEEKDAYS.map((name, i) => html`<option value="${i}" ${String(values.weekday) === String(i) ? 'selected' : ''}>${name}</option>`));
   return html`
     ${error ? html`<p class="form-error" role="alert">${error}</p>` : ''}
     <form method="post" action="${action}" class="booking-form">
       ${csrfField(csrfToken)}
       <div class="form-group">
-        <label for="name">Class name</label>
+        <label for="name">Class name (one weekly slot, e.g. "Sensory Play — Wednesday 11:00 am")</label>
         <input type="text" id="name" name="name" value="${values.name}" required maxlength="100">
       </div>
       <div class="form-group">
@@ -121,6 +125,22 @@ function classForm({ action, values, error = '', csrfToken, submitLabel, showAct
       <div class="form-group">
         <label for="age_range">Age range (e.g. 3–12 months)</label>
         <input type="text" id="age_range" name="age_range" value="${values.age_range}" maxlength="100">
+      </div>
+      <div class="form-group">
+        <label for="weekday">Day of the week</label>
+        <select id="weekday" name="weekday">${joinHtml(weekdayOptions)}</select>
+      </div>
+      <div class="form-group">
+        <label for="start_time">Start time (Sydney, 24h)</label>
+        <input type="time" id="start_time" name="start_time" value="${values.start_time}">
+      </div>
+      <div class="form-group">
+        <label for="default_duration_mins">Usual length (minutes)</label>
+        <input type="number" id="default_duration_mins" name="default_duration_mins" value="${values.default_duration_mins}" min="5" max="480">
+      </div>
+      <div class="form-group">
+        <label for="default_capacity">Usual capacity (seats)</label>
+        <input type="number" id="default_capacity" name="default_capacity" value="${values.default_capacity}" min="1" max="500">
       </div>
       ${showActive ? html`
         <div class="form-group">
@@ -139,47 +159,63 @@ function readClassForm(form) {
     description: cleanText(form.get('description'), 2000),
     venue: cleanText(form.get('venue'), 200),
     age_range: cleanText(form.get('age_range'), 100),
+    weekday: String(form.get('weekday') ?? '').trim(),
+    start_time: String(form.get('start_time') || '').trim(),
+    default_duration_mins: String(form.get('default_duration_mins') || '45').trim(),
+    default_capacity: String(form.get('default_capacity') || '12').trim(),
     active: form.get('active') ? 1 : 0,
   };
-  const error = values.name ? null : 'Please give the class a name.';
-  return { values, error };
+  if (!values.name) return { values, error: 'Please give the class a name.' };
+  const weekday = values.weekday === '' ? null : parseIntInRange(values.weekday, 0, 6);
+  if (values.weekday !== '' && weekday === null) return { values, error: 'Please choose a day of the week.' };
+  if (values.start_time && !/^([01]\d|2[0-3]):[0-5]\d$/.test(values.start_time)) {
+    return { values, error: 'Start time must be a 24-hour time like 11:00.' };
+  }
+  const duration = parseIntInRange(values.default_duration_mins, 5, 480);
+  if (duration === null) return { values, error: 'Usual length must be between 5 and 480 minutes.' };
+  const capacity = parseIntInRange(values.default_capacity, 1, 500);
+  if (capacity === null) return { values, error: 'Usual capacity must be between 1 and 500.' };
+  return {
+    values,
+    parsed: { weekday, startTime: values.start_time || null, duration, capacity },
+    error: null,
+  };
 }
 
-// GET /admin/classes — every class with its terms (label, date range,
-// session count) so the schedule is organised the way it's sold.
+const EMPTY_CLASS = {
+  name: '', description: '', venue: '', age_range: '', weekday: '', start_time: '',
+  default_duration_mins: '45', default_capacity: '12', active: 1,
+};
+
+// GET /admin/classes — every class (weekly slot) with its terms.
 export async function handleAdminClasses(req, env) {
   const user = await requireAdmin(req, env);
   const classes = (await env.DB.prepare(
-    `SELECT id, name, venue, age_range, active FROM classes ORDER BY active DESC, name`,
+    `SELECT id, name, venue, age_range, active, weekday, start_time FROM classes ORDER BY active DESC, name`,
   ).all()).results || [];
-
-  const termRows = (await env.DB.prepare(
-    `SELECT class_id, term_label, COUNT(*) AS session_count,
-            MIN(starts_at) AS first_starts, MAX(starts_at) AS last_starts
-     FROM class_sessions
-     WHERE status = 'scheduled'
-     GROUP BY class_id, term_label
-     ORDER BY first_starts`,
+  const terms = (await env.DB.prepare(
+    `SELECT t.id, t.class_id, t.name, t.status, t.starts_on, t.ends_on,
+            (SELECT COUNT(*) FROM class_sessions s WHERE s.term_id = t.id AND s.status = 'scheduled') AS session_count
+     FROM terms t ORDER BY t.starts_on`,
   ).all()).results || [];
 
   const cards = classes.map((c) => {
-    const terms = termRows.filter((t) => t.class_id === c.id);
-    const termItems = terms.map((t) => html`
+    const termItems = terms.filter((t) => t.class_id === c.id).map((t) => html`
       <li>
-        <a href="/admin?class=${c.id}&term=${encodeURIComponent(t.term_label)}">${t.term_label || 'Unlabelled sessions'}</a>
-        · ${formatSydney(t.first_starts, 'date')} – ${formatSydney(t.last_starts, 'date')}
-        · ${t.session_count} session${t.session_count === 1 ? '' : 's'}
+        <a href="/admin?term=${t.id}">${t.name}</a> · ${t.starts_on} – ${t.ends_on}
+        · ${t.session_count} session${t.session_count === 1 ? '' : 's'} · ${t.status}
       </li>
     `);
     return html`
       <section class="class-card">
         <h2>${c.name}${c.active ? '' : html` <span class="muted">(inactive)</span>`}</h2>
-        <p class="class-meta">${c.age_range} · ${c.venue}</p>
-        ${terms.length
+        <p class="class-meta">${c.weekday !== null ? `${WEEKDAYS[c.weekday]}s` : 'No regular day'}${c.start_time ? ` at ${c.start_time}` : ''} · ${c.age_range} · ${c.venue}</p>
+        ${termItems.length
           ? html`<ul class="term-list">${joinHtml(termItems)}</ul>`
-          : html`<p class="muted">No scheduled sessions yet.</p>`}
+          : html`<p class="muted">No terms yet.</p>`}
         <p class="table-actions">
           <a href="/admin/classes/${c.id}/edit">Edit class</a>
+          <a href="/admin?class=${c.id}">Upcoming sessions</a>
           <a href="/admin/sessions/new?class=${c.id}">Add sessions</a>
         </p>
       </section>
@@ -188,12 +224,11 @@ export async function handleAdminClasses(req, env) {
 
   const body = html`
     <h1>Classes</h1>
-    ${adminNav()}
     ${notice(req)}
     ${cards.length ? joinHtml(cards) : html`<p>No classes yet.</p>`}
     <p><a href="/admin/classes/new" class="button-link">Add a class</a></p>
   `;
-  return pageResponse('Classes', body, { user });
+  return pageResponse('Classes', body, { user, admin: true });
 }
 
 // GET /admin/classes/new
@@ -201,15 +236,9 @@ export async function handleAdminClassNew(req, env) {
   const user = await requireAdmin(req, env);
   const body = html`
     <h1>Add a class</h1>
-    ${adminNav()}
-    ${classForm({
-      action: '/admin/classes/new',
-      values: { name: '', description: '', venue: '', age_range: '', active: 1 },
-      csrfToken: user.csrfToken,
-      submitLabel: 'Create class',
-    })}
+    ${classForm({ action: '/admin/classes/new', values: EMPTY_CLASS, csrfToken: user.csrfToken, submitLabel: 'Create class' })}
   `;
-  return pageResponse('Add a class', body, { user });
+  return pageResponse('Add a class', body, { user, admin: true });
 }
 
 // POST /admin/classes/new
@@ -218,19 +247,21 @@ export async function handleAdminClassNewPost(req, env) {
   const form = await parseForm(req);
   requireCsrf(req, user, form);
 
-  const { values, error } = readClassForm(form);
+  const { values, parsed, error } = readClassForm(form);
   if (error) {
-    const body = html`<h1>Add a class</h1>${adminNav()}${classForm({
+    const body = html`<h1>Add a class</h1>${classForm({
       action: '/admin/classes/new', values, error, csrfToken: user.csrfToken, submitLabel: 'Create class',
     })}`;
-    return pageResponse('Add a class', body, { user, status: 400 });
+    return pageResponse('Add a class', body, { user, status: 400, admin: true });
   }
 
   const classId = uuid();
   await env.DB.prepare(
-    `INSERT INTO classes (id, name, description, venue, age_range, active, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)`,
-  ).bind(classId, values.name, values.description, values.venue, values.age_range, nowIso()).run();
+    `INSERT INTO classes (id, name, description, venue, age_range, weekday, start_time,
+                          default_duration_mins, default_capacity, active, created_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10)`,
+  ).bind(classId, values.name, values.description, values.venue, values.age_range, parsed.weekday,
+    parsed.startTime, parsed.duration, parsed.capacity, nowIso()).run();
 
   logEvent('class_created', { class_id: classId.slice(0, 8) });
   return redirect('/admin/classes?ok=class-created', 303);
@@ -240,22 +271,25 @@ export async function handleAdminClassNewPost(req, env) {
 export async function handleAdminClassEdit(req, env, params) {
   const user = await requireAdmin(req, env);
   const cls = await env.DB.prepare(
-    `SELECT id, name, description, venue, age_range, active FROM classes WHERE id = ?1`,
+    `SELECT id, name, description, venue, age_range, weekday, start_time, default_duration_mins,
+            default_capacity, active FROM classes WHERE id = ?1`,
   ).bind(params.id).first();
   if (!cls) throw notFound();
 
+  const values = {
+    ...cls,
+    weekday: cls.weekday === null ? '' : String(cls.weekday),
+    start_time: cls.start_time || '',
+    default_duration_mins: String(cls.default_duration_mins),
+    default_capacity: String(cls.default_capacity),
+  };
   const body = html`
     <h1>Edit ${cls.name}</h1>
-    ${adminNav()}
     ${classForm({
-      action: `/admin/classes/${cls.id}/edit`,
-      values: cls,
-      csrfToken: user.csrfToken,
-      submitLabel: 'Save class',
-      showActive: true,
+      action: `/admin/classes/${cls.id}/edit`, values, csrfToken: user.csrfToken, submitLabel: 'Save class', showActive: true,
     })}
   `;
-  return pageResponse('Edit class', body, { user });
+  return pageResponse('Edit class', body, { user, admin: true });
 }
 
 // POST /admin/classes/:id/edit — includes deactivation (active checkbox).
@@ -269,17 +303,20 @@ export async function handleAdminClassEditPost(req, env, params) {
   const form = await parseForm(req);
   requireCsrf(req, user, form);
 
-  const { values, error } = readClassForm(form);
+  const { values, parsed, error } = readClassForm(form);
   if (error) {
-    const body = html`<h1>Edit ${cls.name}</h1>${adminNav()}${classForm({
+    const body = html`<h1>Edit ${cls.name}</h1>${classForm({
       action: `/admin/classes/${cls.id}/edit`, values, error, csrfToken: user.csrfToken, submitLabel: 'Save class', showActive: true,
     })}`;
-    return pageResponse('Edit class', body, { user, status: 400 });
+    return pageResponse('Edit class', body, { user, status: 400, admin: true });
   }
 
   await env.DB.prepare(
-    `UPDATE classes SET name = ?1, description = ?2, venue = ?3, age_range = ?4, active = ?5 WHERE id = ?6`,
-  ).bind(values.name, values.description, values.venue, values.age_range, values.active, cls.id).run();
+    `UPDATE classes SET name = ?1, description = ?2, venue = ?3, age_range = ?4, weekday = ?5,
+            start_time = ?6, default_duration_mins = ?7, default_capacity = ?8, active = ?9
+     WHERE id = ?10`,
+  ).bind(values.name, values.description, values.venue, values.age_range, parsed.weekday, parsed.startTime,
+    parsed.duration, parsed.capacity, values.active, cls.id).run();
 
   logEvent('class_updated', { class_id: cls.id.slice(0, 8), active: values.active });
   return redirect('/admin/classes?ok=class-updated', 303);
@@ -287,10 +324,14 @@ export async function handleAdminClassEditPost(req, env, params) {
 
 // --- Sessions ----------------------------------------------------------------
 
-function sessionForm({ action, values, classes, error = '', csrfToken, submitLabel, isEdit = false }) {
+function sessionForm({ action, values, classes, terms, error = '', csrfToken, submitLabel, isEdit = false }) {
   const classOptions = classes.map((c) => html`
     <option value="${c.id}" ${c.id === values.class_id ? 'selected' : ''}>${c.name}${c.active ? '' : ' (inactive)'}</option>
   `);
+  const termOptions = [html`<option value="" ${values.term_id ? '' : 'selected'}>No term (a one-off session)</option>`]
+    .concat(terms.map((t) => html`
+      <option value="${t.id}" ${t.id === values.term_id ? 'selected' : ''}>${t.class_name} — ${t.name} (${t.status})</option>
+    `));
   return html`
     ${error ? html`<p class="form-error" role="alert">${error}</p>` : ''}
     <form method="post" action="${action}" class="booking-form">
@@ -298,6 +339,10 @@ function sessionForm({ action, values, classes, error = '', csrfToken, submitLab
       <div class="form-group">
         <label for="class_id">Class</label>
         <select id="class_id" name="class_id" required>${joinHtml(classOptions)}</select>
+      </div>
+      <div class="form-group">
+        <label for="term_id">Term</label>
+        <select id="term_id" name="term_id">${joinHtml(termOptions)}</select>
       </div>
       <div class="form-group">
         <label for="date">Date (Sydney)</label>
@@ -316,12 +361,8 @@ function sessionForm({ action, values, classes, error = '', csrfToken, submitLab
         <input type="number" id="capacity" name="capacity" value="${values.capacity}" min="1" max="500" required>
       </div>
       <div class="form-group">
-        <label for="price">Price per child (AUD, e.g. 25 or 25.50)</label>
+        <label for="price">Casual price per class (AUD, e.g. 30 or 30.50)</label>
         <input type="text" id="price" name="price" value="${values.price}" required>
-      </div>
-      <div class="form-group">
-        <label for="term_label">Term label (groups the public list, e.g. "Term 3" — optional)</label>
-        <input type="text" id="term_label" name="term_label" value="${values.term_label}" maxlength="50">
       </div>
       ${isEdit ? html`
         <div class="form-group">
@@ -343,25 +384,30 @@ function sessionForm({ action, values, classes, error = '', csrfToken, submitLab
 }
 
 // Validate the shared session fields. Returns { values, parsed, error }.
-function readSessionForm(form, { withRepeat }) {
+function readSessionForm(form, { withRepeat, classes, terms }) {
   const values = {
     class_id: String(form.get('class_id') || ''),
+    term_id: String(form.get('term_id') || ''),
     date: String(form.get('date') || '').trim(),
     time: String(form.get('time') || '').trim(),
     duration: String(form.get('duration') || '').trim(),
     capacity: String(form.get('capacity') || '').trim(),
     price: String(form.get('price') || '').trim(),
-    term_label: cleanText(form.get('term_label'), 50),
     repeat: String(form.get('repeat') || '1').trim(),
     status: form.get('status') === 'cancelled' ? 'cancelled' : 'scheduled',
   };
 
+  const cls = classes.find((c) => c.id === values.class_id);
+  if (!cls) return { values, error: 'Please choose a class.' };
+  const term = values.term_id ? terms.find((t) => t.id === values.term_id) : null;
+  if (values.term_id && !term) return { values, error: 'Please choose a term (or none).' };
+  if (term && term.class_id !== cls.id) return { values, error: `"${term.name}" belongs to a different class.` };
   const duration = parseIntInRange(values.duration, 5, 480);
   if (duration === null) return { values, error: 'Duration must be a whole number of minutes between 5 and 480.' };
   const capacity = parseIntInRange(values.capacity, 1, 500);
   if (capacity === null) return { values, error: 'Capacity must be a positive whole number (1–500).' };
   const priceCents = parseDollarsToCents(values.price);
-  if (priceCents === null) return { values, error: 'Price must be a non-negative AUD amount, e.g. 25 or 25.50.' };
+  if (priceCents === null) return { values, error: 'Price must be a non-negative AUD amount, e.g. 30 or 30.50.' };
 
   let repeat = 1;
   if (withRepeat) {
@@ -372,11 +418,7 @@ function readSessionForm(form, { withRepeat }) {
   const startsAtUtc = sydneyToUtc(values.date, values.time);
   if (!startsAtUtc) return { values, error: 'Please enter a real date and start time.' };
 
-  return { values, parsed: { duration, capacity, priceCents, repeat, startsAtUtc }, error: null };
-}
-
-async function listAllClasses(env) {
-  return (await env.DB.prepare(`SELECT id, name, active FROM classes ORDER BY active DESC, name`).all()).results || [];
+  return { values, parsed: { cls, term, duration, capacity, priceCents, repeat, startsAtUtc }, error: null };
 }
 
 // GET /admin/sessions/new[?class=…]
@@ -384,42 +426,39 @@ export async function handleAdminSessionNew(req, env) {
   const user = await requireAdmin(req, env);
   const classes = await listAllClasses(env);
   if (!classes.length) return redirect('/admin/classes/new', 303);
+  const terms = await listAllTerms(env);
 
   const preselect = new URL(req.url).searchParams.get('class');
-  const classId = classes.some((c) => c.id === preselect) ? preselect : classes[0].id;
-
+  const cls = classes.find((c) => c.id === preselect) || classes[0];
   const body = html`
     <h1>Add sessions</h1>
-    ${adminNav()}
     ${sessionForm({
       action: '/admin/sessions/new',
-      values: { class_id: classId, date: '', time: '09:30', duration: '45', capacity: '12', price: '25', term_label: '', repeat: '1' },
-      classes,
-      csrfToken: user.csrfToken,
-      submitLabel: 'Create sessions',
+      values: {
+        class_id: cls.id, term_id: '', date: '', time: cls.start_time || '11:00',
+        duration: String(cls.default_duration_mins), capacity: String(cls.default_capacity), price: '30', repeat: '1',
+      },
+      classes, terms, csrfToken: user.csrfToken, submitLabel: 'Create sessions',
     })}
   `;
-  return pageResponse('Add sessions', body, { user });
+  return pageResponse('Add sessions', body, { user, admin: true });
 }
 
 // POST /admin/sessions/new — creates 1..N weekly sessions. Each occurrence is
 // converted from Sydney wall-clock independently, so a run crossing an
 // AEST/AEDT changeover keeps the same local start time.
-export async function handleAdminSessionNewPost(req, env, _params) {
+export async function handleAdminSessionNewPost(req, env) {
   const user = await requireAdmin(req, env);
   const form = await parseForm(req);
   requireCsrf(req, user, form);
 
-  const classes = await listAllClasses(env);
-  const { values, parsed, error } = readSessionForm(form, { withRepeat: true });
-
-  const cls = classes.find((c) => c.id === values.class_id);
-  const finalError = error || (cls ? null : 'Please choose a class.');
-  if (finalError) {
-    const body = html`<h1>Add sessions</h1>${adminNav()}${sessionForm({
-      action: '/admin/sessions/new', values, classes, error: finalError, csrfToken: user.csrfToken, submitLabel: 'Create sessions',
+  const [classes, terms] = await Promise.all([listAllClasses(env), listAllTerms(env)]);
+  const { values, parsed, error } = readSessionForm(form, { withRepeat: true, classes, terms });
+  if (error) {
+    const body = html`<h1>Add sessions</h1>${sessionForm({
+      action: '/admin/sessions/new', values, classes, terms, error, csrfToken: user.csrfToken, submitLabel: 'Create sessions',
     })}`;
-    return pageResponse('Add sessions', body, { user, status: 400 });
+    return pageResponse('Add sessions', body, { user, status: 400, admin: true });
   }
 
   const now = nowIso();
@@ -427,13 +466,15 @@ export async function handleAdminSessionNewPost(req, env, _params) {
   for (let week = 0; week < parsed.repeat; week += 1) {
     const startsAt = week === 0 ? parsed.startsAtUtc : sydneyToUtc(addDays(values.date, 7 * week), values.time);
     statements.push(env.DB.prepare(
-      `INSERT INTO class_sessions (id, class_id, starts_at, duration_mins, capacity, price_cents, status, term_label, created_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'scheduled', ?7, ?8)`,
-    ).bind(uuid(), cls.id, startsAt, parsed.duration, parsed.capacity, parsed.priceCents, values.term_label, now));
+      `INSERT INTO class_sessions (id, class_id, term_id, starts_at, duration_mins, capacity, casual_price_cents,
+                                   status, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'scheduled', ?8)`,
+    ).bind(uuid(), parsed.cls.id, parsed.term ? parsed.term.id : null, startsAt, parsed.duration, parsed.capacity,
+      parsed.priceCents, now));
   }
   await env.DB.batch(statements);
 
-  logEvent('sessions_created', { class_id: cls.id.slice(0, 8), count: parsed.repeat });
+  logEvent('sessions_created', { class_id: parsed.cls.id.slice(0, 8), count: parsed.repeat });
   return redirect('/admin?ok=sessions-created', 303);
 }
 
@@ -441,61 +482,61 @@ export async function handleAdminSessionNewPost(req, env, _params) {
 export async function handleAdminSessionEdit(req, env, params) {
   const user = await requireAdmin(req, env);
   const session = await env.DB.prepare(
-    `SELECT id, class_id, starts_at, duration_mins, capacity, price_cents, status, term_label FROM class_sessions WHERE id = ?1`,
+    `SELECT id, class_id, term_id, starts_at, duration_mins, capacity, casual_price_cents, status
+     FROM class_sessions WHERE id = ?1`,
   ).bind(params.id).first();
   if (!session) throw notFound();
 
-  const classes = await listAllClasses(env);
+  const [classes, terms] = await Promise.all([listAllClasses(env), listAllTerms(env)]);
   const fields = sydneyFields(session.starts_at);
   const body = html`
     <h1>Edit session</h1>
-    ${adminNav()}
     ${sessionForm({
       action: `/admin/sessions/${session.id}/edit`,
       values: {
         class_id: session.class_id,
+        term_id: session.term_id || '',
         date: fields.date,
         time: fields.time,
         duration: String(session.duration_mins),
         capacity: String(session.capacity),
-        price: (session.price_cents / 100).toFixed(2),
-        term_label: session.term_label || '',
+        price: (session.casual_price_cents / 100).toFixed(2),
         status: session.status,
       },
-      classes,
-      csrfToken: user.csrfToken,
-      submitLabel: 'Save session',
-      isEdit: true,
+      classes, terms, csrfToken: user.csrfToken, submitLabel: 'Save session', isEdit: true,
     })}
     <p><a href="/admin/sessions/${session.id}/roster">View roster</a></p>
   `;
-  return pageResponse('Edit session', body, { user });
+  return pageResponse('Edit session', body, { user, admin: true });
 }
 
-// POST /admin/sessions/:id/edit — edit details or cancel the session.
+// POST /admin/sessions/:id/edit — edit details or cancel/reinstate the
+// session. (Phase 2B adds cancellation with a reason, notices and credits.)
 export async function handleAdminSessionEditPost(req, env, params) {
   const user = await requireAdmin(req, env);
-  const session = await env.DB.prepare(`SELECT id FROM class_sessions WHERE id = ?1`).bind(params.id).first();
+  const session = await env.DB.prepare(`SELECT id, status FROM class_sessions WHERE id = ?1`).bind(params.id).first();
   if (!session) throw notFound();
 
   const form = await parseForm(req);
   requireCsrf(req, user, form);
 
-  const classes = await listAllClasses(env);
-  const { values, parsed, error } = readSessionForm(form, { withRepeat: false });
-  const cls = classes.find((c) => c.id === values.class_id);
-  const finalError = error || (cls ? null : 'Please choose a class.');
-  if (finalError) {
-    const body = html`<h1>Edit session</h1>${adminNav()}${sessionForm({
-      action: `/admin/sessions/${session.id}/edit`, values, classes, error: finalError, csrfToken: user.csrfToken, submitLabel: 'Save session', isEdit: true,
+  const [classes, terms] = await Promise.all([listAllClasses(env), listAllTerms(env)]);
+  const { values, parsed, error } = readSessionForm(form, { withRepeat: false, classes, terms });
+  if (error) {
+    const body = html`<h1>Edit session</h1>${sessionForm({
+      action: `/admin/sessions/${session.id}/edit`, values, classes, terms, error, csrfToken: user.csrfToken,
+      submitLabel: 'Save session', isEdit: true,
     })}`;
-    return pageResponse('Edit session', body, { user, status: 400 });
+    return pageResponse('Edit session', body, { user, status: 400, admin: true });
   }
 
   await env.DB.prepare(
-    `UPDATE class_sessions SET class_id = ?1, starts_at = ?2, duration_mins = ?3,
-            capacity = ?4, price_cents = ?5, status = ?6, term_label = ?7 WHERE id = ?8`,
-  ).bind(cls.id, parsed.startsAtUtc, parsed.duration, parsed.capacity, parsed.priceCents, values.status, values.term_label, session.id).run();
+    `UPDATE class_sessions SET class_id = ?1, term_id = ?2, starts_at = ?3, duration_mins = ?4, capacity = ?5,
+            casual_price_cents = ?6, status = ?7,
+            cancelled_at = CASE WHEN ?7 = 'cancelled' THEN COALESCE(cancelled_at, ?9) ELSE NULL END
+     WHERE id = ?8`,
+  ).bind(parsed.cls.id, parsed.term ? parsed.term.id : null, parsed.startsAtUtc, parsed.duration, parsed.capacity,
+    parsed.priceCents, values.status, session.id, nowIso()).run();
 
   logEvent('session_updated', { session_id: session.id.slice(0, 8), status: values.status });
   return redirect('/admin?ok=session-updated', 303);
@@ -503,41 +544,41 @@ export async function handleAdminSessionEditPost(req, env, params) {
 
 // --- Roster ------------------------------------------------------------------
 
-const PAYMENT_LABELS = {
-  confirmed: 'Paid',
-  pending: 'Awaiting payment',
-};
-
-// Seat-holding bookings for a session with the parent/child/snapshot detail
-// the roster needs. Consent and medical notes come from the BOOKING snapshot
-// (reflects what was agreed at booking time, not later profile edits).
+// Seat-holding bookings for a session (the held-seat definition) with the
+// parent/child/snapshot detail the roster needs. Consent and medical notes
+// come from the BOOKING snapshot (what was agreed at booking time).
 async function loadRoster(env, sessionId) {
-  const now = nowIso();
   return (await env.DB.prepare(
-    `SELECT b.id AS booking_id, b.status, b.paid_at, b.payment_provider, b.amount_cents,
-            b.photo_consent_snapshot, b.medical_notes_snapshot,
+    `SELECT b.id AS booking_id, b.kind, b.status, b.payment_status, b.payment_provider, b.amount_cents,
+            b.paid_cents, b.photo_consent_snapshot, b.medical_notes_snapshot, bs.attendance,
             u.name AS parent_name, u.email AS parent_email, u.phone AS parent_phone,
             ch.name AS child_name, ch.dob AS child_dob
      FROM booking_sessions bs
      JOIN bookings b ON b.id = bs.booking_id
      JOIN users u ON u.id = b.user_id
      JOIN children ch ON ch.id = b.child_id
-     WHERE bs.session_id = ?1
-       AND (b.status = 'confirmed' OR (b.status = 'pending' AND b.expires_at > ?2))
+     WHERE bs.session_id = ?1 AND ${holdsSeatSql('bs', 'b', '?2')}
      ORDER BY ch.name`,
-  ).bind(sessionId, now).all()).results || [];
+  ).bind(sessionId, nowIso()).all()).results || [];
+}
+
+function paymentLabel(r) {
+  if (r.status === 'pending') return 'Awaiting payment';
+  return PAYMENT_STATUS_LABELS[r.payment_status] || r.payment_status;
 }
 
 async function loadSessionHeader(env, sessionId) {
   return env.DB.prepare(
-    `SELECT cs.id, cs.starts_at, cs.capacity, cs.status, c.name AS class_name, c.venue
-     FROM class_sessions cs JOIN classes c ON c.id = cs.class_id WHERE cs.id = ?1`,
+    `SELECT cs.id, cs.starts_at, cs.capacity, cs.status, c.name AS class_name, c.venue, t.name AS term_name
+     FROM class_sessions cs JOIN classes c ON c.id = cs.class_id LEFT JOIN terms t ON t.id = cs.term_id
+     WHERE cs.id = ?1`,
   ).bind(sessionId).first();
 }
 
-// GET /admin/sessions/:id/roster
+// GET /admin/sessions/:id/roster — admins and staff (facilitators).
 export async function handleAdminRoster(req, env, params) {
-  const user = await requireAdmin(req, env);
+  const user = await requireStaff(req, env);
+  const isAdmin = user.role === 'admin';
   const session = await loadSessionHeader(env, params.id);
   if (!session) throw notFound();
 
@@ -548,31 +589,35 @@ export async function handleAdminRoster(req, env, params) {
       <td>${r.parent_name || '—'}<br><span class="muted">${r.parent_email}${r.parent_phone ? html`<br>${r.parent_phone}` : ''}</span></td>
       <td>${r.photo_consent_snapshot ? 'Yes' : 'No'}</td>
       <td class="roster-medical">${r.medical_notes_snapshot || '—'}</td>
-      <td>${PAYMENT_LABELS[r.status] || r.status}${r.payment_provider ? html`<br><span class="muted">${r.payment_provider}</span>` : ''}</td>
+      <td>${KIND_LABELS[r.kind] || r.kind}</td>
+      <td>${paymentLabel(r)}</td>
     </tr>
   `);
 
   const body = html`
     <h1>Roster — ${session.class_name}</h1>
-    ${adminNav()}
-    <p class="lede">${formatSydney(session.starts_at)} · ${session.venue} · ${roster.length}/${session.capacity} seats taken${session.status === 'cancelled' ? ' · SESSION CANCELLED' : ''}</p>
+    ${notice(req)}
+    <p class="lede">${formatSydney(session.starts_at)} · ${session.venue}${session.term_name ? ` · ${session.term_name}` : ''}
+      · ${roster.length}/${session.capacity} seats taken${session.status === 'cancelled' ? ' · SESSION CANCELLED' : ''}</p>
     ${rows.length ? html`
       <table class="booking-table">
-        <thead><tr><th>Child</th><th>Parent</th><th>Photos OK</th><th>Medical notes</th><th>Payment</th></tr></thead>
+        <thead><tr><th>Child</th><th>Parent</th><th>Photos OK</th><th>Medical notes</th><th>Booking</th><th>Payment</th></tr></thead>
         <tbody>${joinHtml(rows)}</tbody>
       </table>
-      <form method="post" action="/admin/sessions/${session.id}/roster.csv" class="inline-form">
-        ${csrfField(user.csrfToken)}
-        <button type="submit" class="button-secondary">Download roster CSV</button>
-      </form>
+      ${isAdmin ? html`
+        <form method="post" action="/admin/sessions/${session.id}/roster.csv" class="inline-form">
+          ${csrfField(user.csrfToken)}
+          <button type="submit" class="button-secondary">Download roster CSV</button>
+        </form>
+      ` : ''}
     ` : html`<p>No bookings for this session yet.</p>`}
-    <p><a href="/admin">Back to schedule</a></p>
+    ${isAdmin ? html`<p><a href="/admin">Back to schedule</a></p>` : ''}
   `;
-  return pageResponse('Session roster', body, { user });
+  return pageResponse('Session roster', body, { user, admin: isAdmin });
 }
 
-// POST /admin/sessions/:id/roster.csv — CSV export (POST + CSRF so the export
-// cannot be triggered cross-site).
+// POST /admin/sessions/:id/roster.csv — CSV export (admin only; POST + CSRF so
+// the export cannot be triggered cross-site).
 export async function handleAdminRosterCsv(req, env, params) {
   const user = await requireAdmin(req, env);
   const session = await loadSessionHeader(env, params.id);
@@ -587,7 +632,7 @@ export async function handleAdminRosterCsv(req, env, params) {
 
   return csvResponse(
     `roster-${fields.date}.csv`,
-    ['Child', 'Age at session', 'Parent', 'Email', 'Phone', 'Photo consent', 'Medical notes', 'Payment status', 'Amount'],
+    ['Child', 'Age at session', 'Parent', 'Email', 'Phone', 'Photo consent', 'Medical notes', 'Booking', 'Payment status', 'Owed', 'Paid'],
     roster.map((r) => [
       r.child_name,
       formatAge(r.child_dob, session.starts_at),
@@ -596,8 +641,25 @@ export async function handleAdminRosterCsv(req, env, params) {
       r.parent_phone,
       r.photo_consent_snapshot ? 'Yes' : 'No',
       r.medical_notes_snapshot,
-      PAYMENT_LABELS[r.status] || r.status,
+      KIND_LABELS[r.kind] || r.kind,
+      paymentLabel(r),
       formatAud(r.amount_cents),
+      formatAud(r.paid_cents),
     ]),
   );
+}
+
+export function registerRoutes(route) {
+  route('GET', '/admin', handleAdminDashboard);
+  route('GET', '/admin/classes', handleAdminClasses);
+  route('GET', '/admin/classes/new', handleAdminClassNew);
+  route('POST', '/admin/classes/new', handleAdminClassNewPost);
+  route('GET', '/admin/classes/:id/edit', handleAdminClassEdit);
+  route('POST', '/admin/classes/:id/edit', handleAdminClassEditPost);
+  route('GET', '/admin/sessions/new', handleAdminSessionNew);
+  route('POST', '/admin/sessions/new', handleAdminSessionNewPost);
+  route('GET', '/admin/sessions/:id/edit', handleAdminSessionEdit);
+  route('POST', '/admin/sessions/:id/edit', handleAdminSessionEditPost);
+  route('GET', '/admin/sessions/:id/roster', handleAdminRoster);
+  route('POST', '/admin/sessions/:id/roster.csv', handleAdminRosterCsv);
 }

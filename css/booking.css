@@ -545,3 +545,132 @@ button:active {
   font-weight: 400;
   margin: 0 0 var(--space-md);
 }
+
+/* ==========================================================================
+   Core (booking-terms-plans-ops, Phase 1): term cards, checkout price
+   breakdown, plan choice, voucher field, attention flags. Phase 2 areas
+   append their own marked sections below.
+   ========================================================================== */
+
+.term-price {
+  font-weight: 500;
+  margin: var(--space-2xs) 0;
+}
+
+.term-returning,
+.term-plan {
+  display: inline-block;
+  margin-left: var(--space-2xs);
+  padding: 0.05rem 0.55rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.8rem;
+  font-weight: 400;
+  background-color: var(--colour-bg-sage);
+}
+
+.term-plan {
+  background-color: var(--colour-bg-warm);
+}
+
+.term-book {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.term-opens,
+.term-full {
+  background-color: var(--colour-bg-blush);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.casual-form {
+  margin: var(--space-xs) 0;
+}
+
+.checkout-summary {
+  background-color: #fff;
+  border: 1px solid var(--colour-line-soft);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
+.price-breakdown {
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--space-xs) 0;
+}
+
+.price-breakdown td {
+  padding: var(--space-2xs) 0;
+  border-bottom: 1px solid var(--colour-line-soft);
+}
+
+.price-breakdown td:last-child {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.price-total td {
+  font-weight: 600;
+  border-bottom: none;
+}
+
+.voucher-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+  margin: 0 0 var(--space-md);
+}
+
+.voucher-form input {
+  max-width: 12rem;
+}
+
+.voucher-form .form-error {
+  flex-basis: 100%;
+}
+
+.plan-options label {
+  display: block;
+  padding: var(--space-2xs) 0;
+  min-height: 44px;
+}
+
+.plan-schedule {
+  margin-top: var(--space-xs);
+}
+
+.account-credit {
+  background-color: var(--colour-bg-sage);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.row-attention {
+  background-color: var(--colour-bg-blush);
+}
+
+.attention-flag {
+  display: inline-block;
+  margin-top: var(--space-2xs);
+  padding: 0.05rem 0.5rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.8rem;
+  background-color: var(--colour-accent-blush);
+}
+
+.inline-details summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.record-payment-form label {
+  display: block;
+  font-size: 0.85rem;
+  margin: var(--space-2xs) 0;
+}

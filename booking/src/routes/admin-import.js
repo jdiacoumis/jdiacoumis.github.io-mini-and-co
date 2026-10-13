@@ -5,26 +5,26 @@
 // keyed on normalised parent email + child name: users are created with
 // INSERT OR IGNORE on the unique email, children and bookings via guarded
 // INSERT…WHERE NOT EXISTS (single statements are serialised by D1, so
-// concurrent duplicate commits cannot double-insert). Migrated enrolments
-// become confirmed externally-paid bookings that occupy capacity but never
-// trigger payment, confirmation email, or a Purchase conversion event.
+// concurrent duplicate commits cannot double-insert). An enrolment names a
+// class and a term (enrol_class, enrol_term) and becomes a confirmed,
+// externally paid term booking covering the term's remaining sessions: it
+// occupies capacity but never triggers payment, a confirmation email, or a
+// Purchase conversion event. Blank enrolment columns import the family only.
 
 import { html, pageResponse, csrfField, joinHtml } from '../lib/html.js';
 import { requireAdmin, requireCsrf, parseForm } from '../lib/middleware.js';
 import { badRequest } from '../lib/http.js';
 import { uuid, nowIso } from '../lib/db.js';
 import { normaliseEmail, isValidEmail, normalisePhone, cleanText, validateDob } from '../lib/validate.js';
-import { sydneyToUtc, formatSydney } from '../lib/time.js';
 import { parseCsv, csvResponse } from '../lib/csv.js';
 import { sendMagicLinkEmail } from './auth.js';
 import { allowRate } from '../lib/ratelimit.js';
-import { adminNav } from './admin.js';
 import { logEvent, logError, maskEmail } from '../lib/log.js';
 
 const MAX_CSV_BYTES = 256 * 1024;
 const MAX_ROWS = 500;
 const REQUIRED_COLUMNS = ['parent_name', 'parent_email', 'parent_phone', 'child_name', 'child_dob', 'medical_notes', 'photo_consent'];
-const OPTIONAL_COLUMNS = ['enrol_class', 'enrol_sessions'];
+const OPTIONAL_COLUMNS = ['enrol_class', 'enrol_term'];
 
 function parseConsent(value) {
   const v = String(value || '').trim().toLowerCase();
@@ -50,11 +50,22 @@ async function analyseCsv(env, text) {
     return idx === -1 ? '' : String(row[idx] ?? '').trim();
   };
 
-  // Resolve enrolment targets once: class names and session start times.
+  // Resolve enrolment targets once: classes by name, terms by (class, name)
+  // with their remaining scheduled sessions.
+  const now = nowIso();
   const classes = (await env.DB.prepare(`SELECT id, name FROM classes`).all()).results || [];
   const classByName = new Map(classes.map((c) => [c.name.trim().toLowerCase(), c.id]));
-  const sessions = (await env.DB.prepare(`SELECT id, class_id, starts_at FROM class_sessions WHERE status = 'scheduled'`).all()).results || [];
-  const sessionByClassStart = new Map(sessions.map((s) => [`${s.class_id}|${s.starts_at}`, s.id]));
+  const terms = (await env.DB.prepare(`SELECT id, class_id, name FROM terms`).all()).results || [];
+  const termByClassName = new Map(terms.map((t) => [`${t.class_id}|${t.name.trim().toLowerCase()}`, t]));
+  const sessions = (await env.DB.prepare(
+    `SELECT id, term_id FROM class_sessions WHERE status = 'scheduled' AND term_id IS NOT NULL AND starts_at > ?1
+     ORDER BY starts_at`,
+  ).bind(now).all()).results || [];
+  const remainingByTerm = new Map();
+  for (const sess of sessions) {
+    if (!remainingByTerm.has(sess.term_id)) remainingByTerm.set(sess.term_id, []);
+    remainingByTerm.get(sess.term_id).push(sess.id);
+  }
 
   const rows = [];
   for (let i = 1; i < parsed.length; i += 1) {
@@ -68,7 +79,7 @@ async function analyseCsv(env, text) {
       medical_notes: cleanText(col(r, 'medical_notes'), 2000),
       photo_consent: col(r, 'photo_consent'),
       enrol_class: col(r, 'enrol_class'),
-      enrol_sessions: col(r, 'enrol_sessions'),
+      enrol_term: col(r, 'enrol_term'),
     };
     const line = i + 1; // 1-based, counting the header as line 1
 
@@ -80,21 +91,19 @@ async function analyseCsv(env, text) {
     else if (!values.child_name) reason = 'missing child name';
     else if (validateDob(values.child_dob)) reason = `invalid date of birth (${validateDob(values.child_dob)})`;
     else if ((consent = parseConsent(values.photo_consent)) === null) reason = `photo consent "${values.photo_consent}" is not a clear yes/no`;
-    else if (values.enrol_class || values.enrol_sessions) {
+    else if (values.enrol_class || values.enrol_term) {
       const classId = classByName.get(values.enrol_class.trim().toLowerCase());
+      const term = classId ? termByClassName.get(`${classId}|${values.enrol_term.trim().toLowerCase()}`) : null;
       if (!classId) {
         reason = `unknown class "${values.enrol_class}"`;
+      } else if (!values.enrol_term) {
+        reason = 'enrol_class given but enrol_term is empty';
+      } else if (!term) {
+        reason = `no term "${values.enrol_term}" for class "${values.enrol_class}"`;
+      } else if (!(remainingByTerm.get(term.id) || []).length) {
+        reason = `term "${values.enrol_term}" has no sessions left`;
       } else {
-        const sessionIds = [];
-        for (const part of values.enrol_sessions.split(';').map((p) => p.trim()).filter(Boolean)) {
-          const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})$/.exec(part);
-          const utc = m ? sydneyToUtc(m[1], m[2]) : null;
-          const sessionId = utc ? sessionByClassStart.get(`${classId}|${utc}`) : null;
-          if (!sessionId) { reason = `no "${values.enrol_class}" session at "${part}" (expected YYYY-MM-DD HH:MM Sydney time)`; break; }
-          sessionIds.push(sessionId);
-        }
-        if (!reason && !sessionIds.length) reason = 'enrol_class given but enrol_sessions is empty';
-        if (!reason) enrolment = { classId, sessionIds: [...new Set(sessionIds)] };
+        enrolment = { classId, termId: term.id, termName: term.name, sessionIds: remainingByTerm.get(term.id) };
       }
     }
 
@@ -136,7 +145,6 @@ export async function handleImport(req, env) {
   const user = await requireAdmin(req, env);
   const body = html`
     <h1>Customer import</h1>
-    ${adminNav()}
     <p class="lede">Upload the migration CSV (<a href="/admin/import/template.csv">download the template</a>).
       Nothing is saved until you confirm the preview.</p>
     <form method="post" action="/admin/import/preview" enctype="multipart/form-data" class="booking-form">
@@ -148,7 +156,7 @@ export async function handleImport(req, env) {
       <button type="submit">Preview import</button>
     </form>
   `;
-  return pageResponse('Customer import', body, { user });
+  return pageResponse('Customer import', body, { user, admin: true });
 }
 
 // GET /admin/import/template.csv
@@ -156,7 +164,10 @@ export async function handleImportTemplate(req, env) {
   await requireAdmin(req, env);
   return csvResponse('migration-template.csv',
     [...REQUIRED_COLUMNS, ...OPTIONAL_COLUMNS],
-    [['Jane Citizen', 'jane@example.com', '0412345678', 'Ava', '2025-10-01', 'Mild eczema', 'yes', 'Mini & Co. Sensory Play', '2026-07-01 09:30; 2026-07-08 09:30']]);
+    [
+      ['Jane Citizen', 'jane@example.com', '0412345678', 'Ava', '2025-10-01', 'Mild eczema', 'yes', 'Sensory Play — Wednesday 11:00 am', 'Term 1 2027'],
+      ['Sam Smith', 'sam@example.com', '0412000000', 'Leo', '2025-12-01', '', 'no', '', ''],
+    ]);
 }
 
 function previewTable(rows, statuses) {
@@ -165,7 +176,7 @@ function previewTable(rows, statuses) {
       <td>${row.line}</td>
       <td>${row.values.parent_email}</td>
       <td>${row.values.child_name}</td>
-      <td>${row.enrolment ? `${row.enrolment.sessionIds.length} session(s)` : '—'}</td>
+      <td>${row.enrolment ? `${row.enrolment.termName} (${row.enrolment.sessionIds.length} session(s))` : '—'}</td>
       <td>${row.valid ? (statuses ? statuses[i] : 'OK') : html`Invalid — ${row.reason}`}</td>
     </tr>
   `);
@@ -188,9 +199,9 @@ export async function handleImportPreview(req, env) {
   const { rows, error } = await analyseCsv(env, text);
 
   if (error) {
-    const body = html`<h1>Customer import</h1>${adminNav()}<p class="form-error" role="alert">${error}</p>
+    const body = html`<h1>Customer import</h1><p class="form-error" role="alert">${error}</p>
       <p><a href="/admin/import">Try another file</a></p>`;
-    return pageResponse('Customer import', body, { user, status: 400 });
+    return pageResponse('Customer import', body, { user, status: 400, admin: true });
   }
 
   const statuses = [];
@@ -203,7 +214,6 @@ export async function handleImportPreview(req, env) {
   const validCount = rows.filter((r) => r.valid).length;
   const body = html`
     <h1>Import preview</h1>
-    ${adminNav()}
     <p class="lede">${validCount} of ${rows.length} row(s) are valid. Nothing has been saved yet —
       committing imports the valid rows and skips the rest.</p>
     ${previewTable(rows, statuses)}
@@ -214,7 +224,7 @@ export async function handleImportPreview(req, env) {
       <a href="/admin/import" class="button-link button-secondary">Start again</a>
     </form>
   `;
-  return pageResponse('Import preview', body, { user });
+  return pageResponse('Import preview', body, { user, admin: true });
 }
 
 // Import one valid row. Returns a short human outcome string.
@@ -247,35 +257,38 @@ async function importRow(env, row) {
 
   let enrolNote = '';
   if (row.enrolment) {
-    const { sessionIds } = row.enrolment;
-    // Booking: skip if the child already holds a confirmed booking for any of
-    // these sessions (idempotent re-import).
-    const placeholders = sessionIds.map((_, i) => `?${i + 2}`).join(', ');
+    const { termId, sessionIds } = row.enrolment;
+    // Idempotent re-import: skip if the child already has a confirmed term
+    // booking for this term.
     const already = await env.DB.prepare(
-      `SELECT 1 FROM bookings b JOIN booking_sessions bs ON bs.booking_id = b.id
-       WHERE b.child_id = ?1 AND b.status = 'confirmed' AND bs.session_id IN (${placeholders})
-       LIMIT 1`,
-    ).bind(child.id, ...sessionIds).first();
+      `SELECT 1 FROM bookings WHERE child_id = ?1 AND term_id = ?2 AND kind = 'term' AND status = 'confirmed' LIMIT 1`,
+    ).bind(child.id, termId).first();
 
     if (already) {
       enrolNote = ', enrolment already exists';
     } else {
-      // Confirmed externally-paid booking: occupies capacity, nothing owing,
-      // no payment flow, no conversion event. Consent/medical snapshots are
-      // taken from the import (waiver re-acceptance happens at first sign-in
-      // and is versioned on future bookings).
+      // Confirmed, externally paid term booking (paid on the old system):
+      // nothing owing, no payment flow, no conversion event. Weeks the child
+      // already holds are left out. Consent/medical snapshots come from the
+      // import; the waiver is accepted (versioned) on their next booking.
       const bookingId = uuid();
       await env.DB.batch([
         env.DB.prepare(
-          `INSERT INTO bookings (id, user_id, child_id, status, amount_cents, currency,
-             payment_provider, paid_at, photo_consent_snapshot, medical_notes_snapshot, created_at)
-           VALUES (?1, ?2, ?3, 'confirmed', 0, 'AUD', 'external', ?4, ?5, ?6, ?4)`,
-        ).bind(bookingId, parent.id, child.id, now, v.photo_consent === 'yes' ? 1 : 0, v.medical_notes),
+          `INSERT INTO bookings (id, user_id, child_id, kind, term_id, status, list_amount_cents, amount_cents,
+                                 currency, payment_method, payment_status, payment_provider,
+                                 photo_consent_snapshot, medical_notes_snapshot, admin_notes, created_at)
+           VALUES (?1, ?2, ?3, 'term', ?4, 'confirmed', 0, 0, 'AUD', 'none', 'paid', 'external', ?5, ?6,
+                   'Imported from ClassForKids', ?7)`,
+        ).bind(bookingId, parent.id, child.id, termId, v.photo_consent === 'yes' ? 1 : 0, v.medical_notes, now),
         ...sessionIds.map((sid) => env.DB.prepare(
-          `INSERT INTO booking_sessions (booking_id, session_id) VALUES (?1, ?2)`,
-        ).bind(bookingId, sid)),
+          `INSERT INTO booking_sessions (booking_id, session_id, status)
+           SELECT ?1, ?2, 'booked'
+           WHERE NOT EXISTS (SELECT 1 FROM booking_sessions bs JOIN bookings b ON b.id = bs.booking_id
+                             WHERE bs.session_id = ?2 AND b.child_id = ?3 AND b.status = 'confirmed'
+                               AND bs.status = 'booked')`,
+        ).bind(bookingId, sid, child.id)),
       ]);
-      enrolNote = `, enrolled in ${sessionIds.length} session(s)`;
+      enrolNote = `, enrolled in ${row.enrolment.termName}`;
     }
   }
 
@@ -311,7 +324,6 @@ export async function handleImportCommit(req, env) {
 
   const body = html`
     <h1>Import complete</h1>
-    ${adminNav()}
     <p class="lede">${imported} of ${rows.length} row(s) processed. Skipped rows are listed with their reason.</p>
     ${previewTable(rows, statuses)}
     <h2>Invite emails</h2>
@@ -322,7 +334,7 @@ export async function handleImportCommit(req, env) {
       <button type="submit">Send invite emails</button>
     </form>
   `;
-  return pageResponse('Import complete', body, { user });
+  return pageResponse('Import complete', body, { user, admin: true });
 }
 
 // POST /admin/import/invites — magic-link invites to imported parents only,
@@ -363,12 +375,19 @@ export async function handleImportInvites(req, env) {
   const items = results.map((r) => html`<tr><td>${r.email}</td><td>${r.outcome}</td></tr>`);
   const body = html`
     <h1>Invites</h1>
-    ${adminNav()}
     <table class="booking-table">
       <thead><tr><th>Parent</th><th>Outcome</th></tr></thead>
       <tbody>${joinHtml(items)}</tbody>
     </table>
     <p><a href="/admin/customers" class="button-link">View customers</a></p>
   `;
-  return pageResponse('Invites', body, { user });
+  return pageResponse('Invites', body, { user, admin: true });
+}
+
+export function registerRoutes(route) {
+  route('GET', '/admin/import', handleImport);
+  route('GET', '/admin/import/template.csv', handleImportTemplate);
+  route('POST', '/admin/import/preview', handleImportPreview);
+  route('POST', '/admin/import/commit', handleImportCommit);
+  route('POST', '/admin/import/invites', handleImportInvites);
 }

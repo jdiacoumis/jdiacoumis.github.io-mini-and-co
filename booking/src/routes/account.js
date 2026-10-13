@@ -6,7 +6,10 @@ import { requireAuthOrRedirect, requireCsrf, parseForm } from '../lib/middleware
 import { redirect } from '../lib/http.js';
 import { isValidName, isValidAuPhone, normalisePhone, cleanText } from '../lib/validate.js';
 import { formatSydney, formatAge } from '../lib/time.js';
-import { listUserBookings, effectiveStatus, formatAud } from '../lib/domain.js';
+import {
+  listUserBookings, effectiveStatus, formatAud, KIND_LABELS, PAYMENT_STATUS_LABELS,
+} from '../lib/domain.js';
+import { creditBalance } from '../lib/ledger.js';
 import { logEvent } from '../lib/log.js';
 
 const STATUS_LABELS = {
@@ -26,6 +29,7 @@ export async function handleAccountDashboard(req, env) {
   ).bind(user.userId).all()).results || [];
 
   const bookings = await listUserBookings(env, user.userId);
+  const credit = await creditBalance(env, user.userId);
 
   const childItems = children.map((c) => html`
     <li>${c.name} (${formatAge(c.dob)}) — <a href="/account/children/${c.id}/edit">edit</a></li>
@@ -34,12 +38,16 @@ export async function handleAccountDashboard(req, env) {
   const bookingRows = bookings.map((b) => {
     const status = effectiveStatus(b);
     const starts = String(b.session_starts || '').split('|').filter(Boolean).sort();
-    const when = starts.map((s) => formatSydney(s)).join('; ');
+    const when = starts.length > 2
+      ? `${formatSydney(starts[0], 'date')} – ${formatSydney(starts[starts.length - 1], 'date')} (${starts.length} weeks)`
+      : starts.map((s) => formatSydney(s)).join('; ');
+    const what = `${KIND_LABELS[b.kind] || 'Booking'}${b.term_name ? ` — ${b.term_name}` : ''}`;
     return html`
       <tr>
-        <td><a href="/book/confirm?booking=${b.id}">${when || '—'}</a></td>
+        <td><a href="/book/confirm?booking=${b.id}">${what}</a><br><span class="muted">${when || '—'}</span></td>
         <td>${b.child_name}</td>
-        <td>${formatAud(b.amount_cents)}</td>
+        <td>${formatAud(b.amount_cents)}${b.paid_cents && b.paid_cents !== b.amount_cents ? html`<br><span class="muted">paid ${formatAud(b.paid_cents)}</span>` : ''}</td>
+        <td>${status === 'confirmed' ? PAYMENT_STATUS_LABELS[b.payment_status] || b.payment_status : '—'}</td>
         <td><span class="status status-${status}">${STATUS_LABELS[status] || status}</span></td>
       </tr>
     `;
@@ -56,10 +64,11 @@ export async function handleAccountDashboard(req, env) {
       <h2>My bookings</h2>
       ${bookings.length ? html`
         <table class="booking-table">
-          <thead><tr><th>Session(s)</th><th>Child</th><th>Amount</th><th>Status</th></tr></thead>
+          <thead><tr><th>Booking</th><th>Child</th><th>Amount</th><th>Payment</th><th>Status</th></tr></thead>
           <tbody>${joinHtml(bookingRows)}</tbody>
         </table>
       ` : html`<p>No bookings yet — <a href="/book">grab a spot in the next class</a>.</p>`}
+      ${credit > 0 ? html`<p class="account-credit">Account credit: <strong>${formatAud(credit)}</strong> — applied automatically at checkout.</p>` : ''}
     </section>
 
     <section class="account-section">
@@ -129,4 +138,10 @@ export async function handleProfilePost(req, env) {
 
   logEvent('profile_updated', { user_id: user.userId.slice(0, 8) });
   return redirect('/account', 303);
+}
+
+export function registerRoutes(route) {
+  route('GET', '/account', handleAccountDashboard);
+  route('GET', '/account/profile', handleProfile);
+  route('POST', '/account/profile', handleProfilePost);
 }
