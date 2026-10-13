@@ -963,8 +963,90 @@ const AUTO_ENROL_ERRORS = {
   credit_changed: 'account credit changed — try again',
 };
 
-// POST /admin/terms/:id/auto-enrol — one pending booking per ticked child
-// (capacity-guarded), then the re-enrol invitation (once per term and child).
+// Auto-enrol runs one family per request (each held place costs about 20
+// database queries and an email; Cloudflare caps a request at 50 queries on
+// the free plan — README → Scheduled work and limits). The result page
+// carries the families still to do in a "Continue" form, which
+// js/admin-continue.js submits by itself; without JavaScript the owner
+// presses it.
+export const AUTO_ENROL_PER_STEP = 1;
+const AUTO_CONTINUE_HEAD = html`<script src="/js/admin-continue.js" defer></script>`;
+
+// What happened to one child — allow-listed codes, carried between steps.
+const ENROL_OUTCOMES = {
+  held: 'Place held — invitation sent',
+  'held-earlier-email': 'Place held — the invitation for this place had already been sent',
+  'held-no-email': 'Place held — the invitation could not be sent: please tell the family yourself',
+  confirmed: 'Booked — fully covered by account credit, confirmation sent',
+  'confirmed-no-email': 'Booked — fully covered by account credit (the confirmation could not be emailed)',
+  already: 'Skipped — already has a place',
+  failed: 'Failed — please try again',
+  ...Object.fromEntries(Object.entries(AUTO_ENROL_ERRORS).map(([code, why]) => [`skip-${code}`, `Skipped — ${why}`])),
+};
+
+// Hold one child's place and email the family. Returns { code, bookingId }.
+async function enrolOne(env, term, c, { now, expiresAt, accountUrl }) {
+  if (c.alreadyHeld) return { code: 'already', bookingId: null };
+  let enrolled;
+  try {
+    enrolled = await autoEnrolChild(env, { term, userId: c.userId, childId: c.childId, now, expiresAt });
+  } catch (err) {
+    logError('auto_enrol_failed', err, { term_id: term.id.slice(0, 8) });
+    return { code: 'failed', bookingId: null };
+  }
+  if (!enrolled.ok) {
+    const code = `skip-${enrolled.error}`;
+    return { code: Object.hasOwn(ENROL_OUTCOMES, code) ? code : 'failed', bookingId: null };
+  }
+  if (enrolled.confirmed) {
+    const mail = await notifyBookingConfirmed(env, enrolled.bookingId);
+    return { code: mail && (mail.sent || mail.skipped) ? 'confirmed' : 'confirmed-no-email', bookingId: enrolled.bookingId };
+  }
+  const message = reenrolInvitation({
+    parentName: c.parentName, childName: c.childName, termName: term.name, className: term.class_name,
+    amountCents: enrolled.amountCents, payByAt: enrolled.expiresAt, accountUrl,
+    returning: term.returning_price_cents !== null && term.returning_price_cents !== undefined,
+  });
+  // Keyed on the held place itself (review finding 6): re-running auto-enrol
+  // after a hold lapsed holds a NEW place, and its family is told again.
+  const mail = await sendTemplate(env, {
+    template: 'reenrol_invitation', to: c.parentEmail, userId: c.userId, bookingId: enrolled.bookingId,
+    termId: term.id, dedupeKey: `reenrol:${term.id}:${c.childId}:${enrolled.bookingId}`, ...message,
+  });
+  const code = mail.sent ? 'held' : mail.skipped ? 'held-earlier-email' : 'held-no-email';
+  return { code, bookingId: enrolled.bookingId };
+}
+
+// "childId.bookingId.code" entries for the children already done (bookingId
+// '-' when none), validated against this term's candidates, the codes and —
+// for a place held or booked — the booking itself.
+async function readDone(env, form, term, candidates) {
+  const known = new Map(candidates.map((c) => [c.childId, c]));
+  const entries = new Map();
+  for (const entry of form.getAll('done').map(String).slice(0, 500)) {
+    const [childId, bookingId, code] = entry.split('.');
+    if (!known.has(childId) || entries.has(childId) || !Object.hasOwn(ENROL_OUTCOMES, code)) continue;
+    if (bookingId !== '-' && !isValidId(bookingId)) continue;
+    entries.set(childId, { c: known.get(childId), bookingId: bookingId === '-' ? null : bookingId, code });
+  }
+  const ids = [...entries.values()].map((d) => d.bookingId).filter(Boolean);
+  const bookings = new Map(ids.length ? ((await env.DB.prepare(
+    `SELECT id, child_id, amount_cents, expires_at FROM bookings
+     WHERE term_id = ?1 AND id IN (${ids.map((_, i) => `?${i + 2}`).join(', ')})`,
+  ).bind(term.id, ...ids).all()).results || []).map((b) => [b.id, b]) : []);
+  const done = new Map();
+  for (const [childId, d] of entries) {
+    const needsBooking = d.code.startsWith('held') || d.code.startsWith('confirmed');
+    const booking = d.bookingId ? bookings.get(d.bookingId) : null;
+    if (needsBooking && (!booking || booking.child_id !== childId)) continue;
+    done.set(childId, { ...d, booking });
+  }
+  return done;
+}
+
+// POST /admin/terms/:id/auto-enrol — hold places for the ticked children,
+// one family per step (capacity-guarded pending bookings at the returning
+// price, then the re-enrol invitation), reporting honestly what was sent.
 export async function handleAdminAutoEnrolPost(req, env, params) {
   const user = await requireAdmin(req, env);
   const term = await loadTerm(env, params.id);
@@ -974,71 +1056,54 @@ export async function handleAdminAutoEnrolPost(req, env, params) {
 
   const now = nowIso();
   const candidates = await autoEnrolCandidates(env, term, now);
-  const wanted = new Set(form.getAll('child').map(String).filter((id) => isValidId(id)));
+  const done = await readDone(env, form, term, candidates);
+  const wanted = new Set(form.getAll('child').map(String).filter((id) => isValidId(id) && !done.has(id)));
   const chosen = candidates.filter((c) => wanted.has(c.childId));
+  const step = chosen.slice(0, AUTO_ENROL_PER_STEP);
+  const rest = chosen.slice(AUTO_ENROL_PER_STEP);
   const expiresAt = autoEnrolExpiry(term, now);
   const accountUrl = `${env.PUBLIC_BASE_URL}/account`;
 
-  const results = [];
-  for (const c of chosen) {
-    if (c.alreadyHeld) {
-      results.push({ c, outcome: 'Skipped — already has a place' });
-      continue;
-    }
-    let enrolled;
-    try {
-      enrolled = await autoEnrolChild(env, { term, userId: c.userId, childId: c.childId, now, expiresAt });
-    } catch (err) {
-      logError('auto_enrol_failed', err, { term_id: term.id.slice(0, 8) });
-      results.push({ c, outcome: 'Failed — please try again' });
-      continue;
-    }
-    if (!enrolled.ok) {
-      results.push({ c, outcome: `Skipped — ${AUTO_ENROL_ERRORS[enrolled.error] || enrolled.error}` });
-      continue;
-    }
-    let mail;
-    if (enrolled.confirmed) {
-      mail = await notifyBookingConfirmed(env, enrolled.bookingId);
-    } else {
-      const message = reenrolInvitation({
-        parentName: c.parentName, childName: c.childName, termName: term.name, className: term.class_name,
-        amountCents: enrolled.amountCents, payByAt: enrolled.expiresAt, accountUrl,
-        returning: term.returning_price_cents !== null && term.returning_price_cents !== undefined,
-      });
-      mail = await sendTemplate(env, {
-        template: 'reenrol_invitation', to: c.parentEmail, userId: c.userId, bookingId: enrolled.bookingId,
-        termId: term.id, dedupeKey: `reenrol:${term.id}:${c.childId}`, ...message,
-      });
-    }
-    const emailed = mail && (mail.sent || mail.skipped);
-    results.push({
-      c,
-      bookingId: enrolled.bookingId,
-      outcome: enrolled.confirmed
-        ? `Booked — fully covered by account credit${emailed ? ', confirmation sent' : ''}`
-        : `Place held until ${shortDate(enrolled.expiresAt)} for ${formatAud(enrolled.amountCents)}${emailed ? ' — invitation sent' : ' — email could not be sent'}`,
-    });
+  for (const c of step) {
+    const { code, bookingId } = await enrolOne(env, term, c, { now, expiresAt, accountUrl });
+    const booking = bookingId ? await env.DB.prepare(
+      `SELECT id, child_id, amount_cents, expires_at FROM bookings WHERE id = ?1`,
+    ).bind(bookingId).first() : null;
+    done.set(c.childId, { c, bookingId, code, booking });
   }
-  logEvent('auto_enrol_run', { term_id: term.id.slice(0, 8), chosen: chosen.length, by: user.userId.slice(0, 8) });
+  logEvent('auto_enrol_step', { term_id: term.id.slice(0, 8), done: done.size, left: rest.length, by: user.userId.slice(0, 8) });
 
-  const rows = results.map((r) => html`
-    <tr>
-      <td>${r.bookingId ? html`<a href="/admin/bookings/${r.bookingId}">${r.c.childName}</a>` : r.c.childName}</td>
-      <td>${r.c.parentName || '—'}<br><span class="muted">${r.c.parentEmail}</span></td>
-      <td>${r.outcome}</td>
-    </tr>`);
+  // Amounts and deadlines of the places held, from the bookings themselves.
+  const rows = [...done.values()].map((d) => {
+    const b = d.booking;
+    const terms = b && d.code.startsWith('held') ? ` (until ${shortDate(b.expires_at)}, ${formatAud(b.amount_cents)})` : '';
+    return html`
+      <tr>
+        <td>${d.bookingId ? html`<a href="/admin/bookings/${d.bookingId}">${d.c.childName}</a>` : d.c.childName}</td>
+        <td>${d.c.parentName || '—'}<br><span class="muted">${d.c.parentEmail}</span></td>
+        <td>${ENROL_OUTCOMES[d.code]}${terms}</td>
+      </tr>`;
+  });
   const body = html`
     <p class="breadcrumb"><a href="/admin/terms">Terms</a> › <a href="/admin/terms/${term.id}">${term.name}</a></p>
-    <h1>Places held</h1>
+    <h1>${rest.length ? 'Holding places…' : 'Places held'}</h1>
     ${rows.length ? html`
       <table class="booking-table">
         <thead><tr><th>Child</th><th>Parent</th><th>Result</th></tr></thead>
         <tbody>${joinHtml(rows)}</tbody>
       </table>` : html`<p>No families were ticked.</p>`}
-    <p>When you're ready for everyone else, open the term from <a href="/admin/terms/${term.id}">its grid</a>.</p>
+    ${rest.length ? html`
+      <form method="post" action="/admin/terms/${term.id}/auto-enrol" class="booking-form" data-auto-continue>
+        ${csrfField(user.csrfToken)}
+        ${joinHtml([...done.values()].map((d) => html`<input type="hidden" name="done" value="${d.c.childId}.${d.bookingId || '-'}.${d.code}">`))}
+        ${joinHtml(rest.map((c) => html`<input type="hidden" name="child" value="${c.childId}">`))}
+        <p class="form-hint" data-auto-continue-note>${rest.length} more ${rest.length === 1 ? 'family' : 'families'} to go —
+          places are held one family at a time. Press Continue if this page doesn't carry on by itself.</p>
+        <button type="submit">Continue (${rest.length} left)</button>
+      </form>`
+    : html`<p>When you're ready for everyone else, open the term from <a href="/admin/terms/${term.id}">its grid</a>.</p>`}
   `;
-  return pageResponse('Places held', body, { user, admin: true });
+  return pageResponse('Places held', body, { user, admin: true, extraHead: rest.length ? AUTO_CONTINUE_HEAD : '' });
 }
 
 export function registerRoutes(route) {

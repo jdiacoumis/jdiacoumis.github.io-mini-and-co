@@ -1276,18 +1276,12 @@ export async function autoEnrolChild(env, { term, userId, childId, now = nowIso(
     `SELECT id, photo_consent, medical_notes FROM children WHERE id = ?1 AND user_id = ?2 AND archived_at IS NULL`,
   ).bind(childId, userId).first();
   if (!child) return { ok: false, error: 'child' };
-  const ask = (priceOverrideCents = null) => prepareBooking(env, {
-    userId, childId, kind: 'term', termId: term.id, now, admin: true, priceOverrideCents,
+  // The returning price (pro-rated if the term has started) even before the
+  // returning window opens — one quote, so the place costs few queries.
+  const prepared = await prepareBooking(env, {
+    userId, childId, kind: 'term', termId: term.id, now, admin: true, forceReturningPrice: true,
   });
-  let prepared = await ask();
   if (!prepared.ok) return { ok: false, error: prepared.error };
-  if (term.returning_price_cents !== null && term.returning_price_cents !== undefined) {
-    const wanted = proRata(term.returning_price_cents, prepared.quote.weeks, prepared.quote.totalWeeks);
-    if (wanted !== prepared.quote.listCents) {
-      prepared = await ask(wanted);
-      if (!prepared.ok) return { ok: false, error: prepared.error };
-    }
-  }
   const created = await createPendingBooking(env, {
     userId, childId, kind: 'term', termId: term.id, sessionIds: prepared.quote.sessionIds, quote: prepared.quote,
     photoConsent: child.photo_consent === 1, medicalNotes: child.medical_notes || '',

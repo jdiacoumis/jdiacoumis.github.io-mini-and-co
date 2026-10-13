@@ -172,3 +172,31 @@ export function routeHandler(module, method, pattern) {
   if (!found) throw new Error(`no route ${method} ${pattern}`);
   return found.handler;
 }
+
+// Count what a request asks of D1: `queries` (each run/all/first and each
+// batch call) and `statements` (each batched statement counted on its own —
+// the stricter reading of Cloudflare's per-request query limit).
+export function countingEnv(env) {
+  const stats = { queries: 0, batches: 0, statements: 0 };
+  const wrap = (stmt) => new Proxy(stmt, {
+    get(target, key) {
+      if (key === 'bind') return (...args) => wrap(target.bind(...args));
+      if (['run', 'all', 'first', 'raw'].includes(key)) {
+        return (...args) => { stats.queries += 1; stats.statements += 1; return target[key](...args); };
+      }
+      const value = target[key];
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  const DB = new Proxy(env.DB, {
+    get(target, key) {
+      if (key === 'prepare') return (sql) => wrap(target.prepare(sql));
+      if (key === 'batch') {
+        return (list) => { stats.queries += 1; stats.batches += 1; stats.statements += list.length; return target.batch(list); };
+      }
+      const value = target[key];
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  return { env: { ...env, DB }, stats };
+}

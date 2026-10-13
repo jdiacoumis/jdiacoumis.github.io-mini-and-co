@@ -325,6 +325,8 @@ function fail(error, extra = {}) {
 //   admin: true for owner-made bookings — skips opening times and term status
 //          (auto-enrol targets draft terms) and allows complimentary
 //   priceOverrideCents: admin price override (replaces the list price)
+//   forceReturningPrice: admin auto-enrol — the term's returning price (if
+//               it has one), pro-rated, whatever its returning window says
 //
 // Returns { ok: true, kind, term, sessions, quote, warnings } where quote =
 //   { kind, sessionIds, weeks, totalWeeks, listCents, isProRata, isReturning,
@@ -338,7 +340,7 @@ function fail(error, extra = {}) {
 //   says why, and the caller decides.
 export async function prepareBooking(env, {
   userId, childId, kind, termId = null, sessionIds = [], voucherCode = '',
-  paymentChoice = 'full', now = nowIso(), admin = false, priceOverrideCents = null,
+  paymentChoice = 'full', now = nowIso(), admin = false, priceOverrideCents = null, forceReturningPrice = false,
 }) {
   if (!BOOKING_KINDS.includes(kind) || (kind === 'complimentary' && !admin)) return fail('invalid_kind');
 
@@ -359,6 +361,7 @@ export async function prepareBooking(env, {
     const held = await sessionsAlreadyBookedForChild(env, childId, all.map((s) => s.id), now);
     base = quoteTerm({
       term, sessions: all, now, returning, excludeSessionIds: [...held], ignoreOpening: admin,
+      forceReturningPrice: admin && forceReturningPrice,
     });
     if (!base.ok) return fail(base.reason, { opensAt: base.opensAt || null });
     if (held.size) warnings.push('child_already_holds_some_weeks');

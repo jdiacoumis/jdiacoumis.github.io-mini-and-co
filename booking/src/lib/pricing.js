@@ -58,7 +58,11 @@ export function proRata(priceCents, weeks, totalWeeks) {
 // has not started, minus `excludeSessionIds` (weeks the child already holds,
 // e.g. a trial). Price: term (or returning) price pro-rated on covered weeks
 // over total scheduled weeks — the full price before the term starts.
-export function quoteTerm({ term, sessions, now, returning = false, excludeSessionIds = [], ignoreOpening = false }) {
+// `forceReturningPrice` (the owner's auto-enrol): the returning price, when
+// the term has one, whatever the returning window says.
+export function quoteTerm({
+  term, sessions, now, returning = false, excludeSessionIds = [], ignoreOpening = false, forceReturningPrice = false,
+}) {
   if (!ignoreOpening) {
     const access = canBookTerm({ term, now, returning });
     if (!access.open) return { ok: false, reason: access.reason, opensAt: access.opensAt };
@@ -70,7 +74,9 @@ export function quoteTerm({ term, sessions, now, returning = false, excludeSessi
   const covered = upcoming.filter((s) => !exclude.has(s.id));
   if (!covered.length) return { ok: false, reason: 'already_booked' };
 
-  const isReturning = returningPriceApplies({ term, now, returning });
+  const isReturning = forceReturningPrice
+    ? term.returning_price_cents !== null && term.returning_price_cents !== undefined
+    : returningPriceApplies({ term, now, returning });
   const basePriceCents = isReturning ? term.returning_price_cents : term.term_price_cents;
   return {
     ok: true,
