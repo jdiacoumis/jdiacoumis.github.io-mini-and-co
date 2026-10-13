@@ -412,7 +412,6 @@ export async function handleAdminNewBookingDetails(req, env) {
   return newBookingStep2(env, user, ctx, readStep2Choices(url.searchParams));
 }
 
-
 // The family's emails after an owner-made booking: a receipt for money
 // received, the confirmation for a confirmed booking, the Pay now request
 // for a pay-later hold. Email problems never undo the booking.

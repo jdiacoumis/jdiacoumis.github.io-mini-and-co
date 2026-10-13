@@ -733,7 +733,6 @@ async function loadSessionHeader(env, sessionId) {
   ).bind(sessionId).first();
 }
 
-
 function attendanceControls(r, sessionId, csrfToken) {
   const button = (mark, label) => html`
     <button type="submit" name="mark" value="${mark}" class="attendance-button attendance-${mark}"
