@@ -66,15 +66,17 @@ export function paymentInsertStatement(env, {
     String(note || ''), recordedBy, paidAt || now, now);
 }
 
-// The 'credit_applied' row for a booking's credit_cents, once (at confirmation).
-export function creditAppliedStatement(env, bookingId, now = nowIso()) {
+// The 'credit_applied' row for a booking's credit, once (at confirmation).
+// By default the booking's credit_cents; `amountCents` records less when
+// only part of the credit could be redeemed (a late re-confirmation).
+export function creditAppliedStatement(env, bookingId, now = nowIso(), amountCents = null) {
   return env.DB.prepare(
     `INSERT INTO payments (id, booking_id, kind, amount_cents, method, note, paid_at, created_at)
-     SELECT ?1, b.id, 'credit_applied', b.credit_cents, 'credit', 'Account credit applied', ?3, ?3
+     SELECT ?1, b.id, 'credit_applied', COALESCE(?4, b.credit_cents), 'credit', 'Account credit applied', ?3, ?3
      FROM bookings b
-     WHERE b.id = ?2 AND b.credit_cents > 0
+     WHERE b.id = ?2 AND COALESCE(?4, b.credit_cents) > 0
        AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.booking_id = b.id AND p.kind = 'credit_applied')`,
-  ).bind(uuid(), bookingId, now);
+  ).bind(uuid(), bookingId, now, amountCents);
 }
 
 // Re-derive paid_cents, paid_at and payment_status from the ledger.

@@ -640,16 +640,9 @@ async function attemptConfirm(env, bookingId, {
             stripe_subscription_id = COALESCE(?5, stripe_subscription_id)
      WHERE id = ?1 AND status IN ('pending', 'expired')`,
   ).bind(bookingId, provider, paymentRef, paymentIntent, subscriptionId);
-  const after = [
-    ...txnGuard(env, `(SELECT status FROM bookings WHERE id = ?1) = 'confirmed'`, [bookingId], 'state'),
-    waitlistBookedStatement(env, bookingId, now),
-    creditAppliedStatement(env, bookingId, now),
-    ...ledger,
-    recompute,
-  ];
-
   let before = [];
   let creditShortfall = false;
+  let creditApplied = null; // null = the booking's full credit_cents
   if (!holdLive) {
     // D6: the hold lapsed before the payment landed — re-take every seat.
     const notYet = `(SELECT status FROM bookings WHERE id = ?1) IN ('pending', 'expired')`;
@@ -677,15 +670,23 @@ async function attemptConfirm(env, bookingId, {
         }));
       }
       creditShortfall = creditCents < booking.credit_cents;
+      creditApplied = creditCents; // the ledger records only what was re-taken
     }
     if (booking.voucher_code) {
       before.push(...voucherUseStatements(env, booking.voucher_code, {
         bookingId, now, whenStatusIn: ['expired'], enforceLimits: false,
       }));
     }
-    if (creditShortfall) after.push(flagStatement(env, bookingId, 'credit_shortfall', { overwrite: false }));
   }
 
+  const after = [
+    ...txnGuard(env, `(SELECT status FROM bookings WHERE id = ?1) = 'confirmed'`, [bookingId], 'state'),
+    waitlistBookedStatement(env, bookingId, now),
+    creditAppliedStatement(env, bookingId, now, creditApplied),
+    ...ledger,
+    ...(creditShortfall ? [flagStatement(env, bookingId, 'credit_shortfall', { overwrite: false })] : []),
+    recompute,
+  ];
   const statements = [...before, flip, ...after];
   try {
     const results = await env.DB.batch(statements);

@@ -202,6 +202,29 @@ test('credits: redeemed when reserving, returned on expiry, re-taken when a late
   assert.equal(credit.remaining_cents, 0);
 });
 
+test('a late payment whose credit was spent meanwhile confirms, records only the credit re-taken, and is flagged', async () => {
+  const fam = await seedFamilyAndTerm(env, { prefix: 'h2', children: 2 });
+  const creditId = await issueCredit(env, { userId: fam.userId, amountCents: 1000 });
+  const first = await book(fam, { kind: 'casual', sessionIds: [fam.sessionIds[0]] });
+  assert.equal(first.prepared.quote.creditCents, 1000);
+  await expireBooking(env, first.created.id);                     // credit returned…
+  const second = await book(fam, { kind: 'casual', sessionIds: [fam.sessionIds[1]], childId: fam.childIds[1] });
+  assert.equal(second.prepared.quote.creditCents, 1000);           // …and spent by a sibling's booking
+
+  const result = await confirmBooking(env, first.created.id, {
+    provider: 'mock', payment: { kind: 'checkout', amountCents: 2000, providerRef: 'pi_late_h2' },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.creditShortfall, true);
+  const b = await row(first.created.id);
+  assert.equal(b.status, 'confirmed', 'the family paid, the seat was free: honoured');
+  assert.equal(b.needs_attention, 'credit_shortfall');
+  assert.equal(b.paid_cents, 2000, 'no credit_applied row for credit that was not redeemed');
+  assert.equal(b.payment_status, 'unpaid', '$10 still outstanding');
+  const credit = await env.DB.prepare(`SELECT remaining_cents FROM credits WHERE id = ?1`).bind(creditId).first();
+  assert.equal(credit.remaining_cents, 0, 'never overspent');
+});
+
 test('a credit covering the whole class confirms with nothing to pay', async () => {
   const fam = await seedFamilyAndTerm(env, { prefix: 'i' });
   await issueCredit(env, { userId: fam.userId, amountCents: 3000 });
