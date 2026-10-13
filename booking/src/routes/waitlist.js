@@ -176,23 +176,29 @@ export async function handleWaitlistJoin(req, env) {
   if (live.some((b) => b.term_id === term.id && b.child_id === child.id)) return back('booked');
 
   const existing = await env.DB.prepare(
-    `SELECT id, status FROM waitlist WHERE term_id = ?1 AND child_id = ?2`,
+    `SELECT id, status, note, offer_booking_id FROM waitlist WHERE term_id = ?1 AND child_id = ?2`,
   ).bind(term.id, child.id).first();
   if (existing && (existing.status === 'waiting' || existing.status === 'offered')) return back('already');
   if (existing && existing.status === 'booked') return back('booked');
 
+  const insert = env.DB.prepare(
+    `INSERT INTO waitlist (id, term_id, user_id, child_id, status, note, joined_at, offer_booking_id)
+     VALUES (?1, ?2, ?3, ?4, 'waiting', ?5, ?6, ?7)
+     ON CONFLICT(term_id, child_id) DO NOTHING`,
+  );
   if (existing) {
-    await env.DB.prepare(
-      `UPDATE waitlist SET status = 'waiting', joined_at = ?3, offered_at = NULL, offer_expires_at = NULL,
-              resolved_at = NULL, note = TRIM(note || ' ' || ?4)
-       WHERE id = ?1 AND user_id = ?2 AND status IN ('removed', 'declined')`,
-    ).bind(existing.id, user.userId, now, `Re-joined online ${formatSydney(now, 'date')}.`).run();
+    // Re-joining goes to the back of the line: the entry is re-created, so
+    // even a family joining in the same second is ordered correctly. Notes
+    // (and a past offer's booking, should its payment still arrive) carry over.
+    const note = `${existing.note ? `${existing.note} ` : ''}Re-joined online ${formatSydney(now, 'date')}.`;
+    await env.DB.batch([
+      env.DB.prepare(
+        `DELETE FROM waitlist WHERE id = ?1 AND user_id = ?2 AND status IN ('removed', 'declined')`,
+      ).bind(existing.id, user.userId),
+      insert.bind(uuid(), term.id, user.userId, child.id, note.slice(0, 1000), now, existing.offer_booking_id),
+    ]);
   } else {
-    await env.DB.prepare(
-      `INSERT INTO waitlist (id, term_id, user_id, child_id, status, joined_at)
-       VALUES (?1, ?2, ?3, ?4, 'waiting', ?5)
-       ON CONFLICT(term_id, child_id) DO NOTHING`,
-    ).bind(uuid(), term.id, user.userId, child.id, now).run();
+    await insert.bind(uuid(), term.id, user.userId, child.id, '', now, null).run();
   }
   logEvent('waitlist_joined', { user_id: user.userId.slice(0, 8), term_id: term.id.slice(0, 8) });
   return back('joined');

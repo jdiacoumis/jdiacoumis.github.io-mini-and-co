@@ -216,7 +216,15 @@ function termBlock(term, view) {
       ? html`<li>${b.child_name}'s place is held until ${formatSydney(b.expires_at)}. <a href="/account/bookings/${b.id}/pay">Pay now</a></li>`
       : html`<li>${b.child_name}'s booking is waiting for its payment to finish.</li>`;
   });
-  const waitNotes = entries.map((w) => html`<li>${w.child_name} is on the waitlist — ${waitlistPositionText(w.position)}.</li>`);
+  // An offer of the whole term already shows above as a held booking; an
+  // offer of a trial or chosen weeks is shown here.
+  const heldIds = new Set(booked.map((b) => b.id));
+  const waitNotes = entries.map((w) => {
+    if (w.status === 'waiting') return html`<li>${w.child_name} is on the waitlist — ${waitlistPositionText(w.position)}.</li>`;
+    if (!w.offer_booking_id || heldIds.has(w.offer_booking_id)) return '';
+    return html`<li>A place is being held for ${w.child_name}${w.offer_expires_at ? html` until ${formatSydney(w.offer_expires_at)}` : ''}.
+      <a href="/account/bookings/${w.offer_booking_id}/pay">Pay now</a></li>`;
+  }).filter(Boolean);
   const notes = [...bookedNotes, ...waitNotes];
 
   let actions;
@@ -243,8 +251,10 @@ function termBlock(term, view) {
           </p>` : '')
       : html`
           <div class="term-full">
-            <p><strong>This term is full.</strong> Join the waitlist and we'll email you if a place opens up.</p>
-            ${canJoinWaitlist ? html`<p><a class="button-link button-secondary" href="/book/waitlist?term=${term.id}">Join the waitlist</a></p>` : ''}
+            ${canJoinWaitlist ? html`
+              <p><strong>This term is full.</strong> Join the waitlist and we'll email you if a place opens up.</p>
+              <p><a class="button-link button-secondary" href="/book/waitlist?term=${term.id}">Join the waitlist</a></p>`
+            : html`<p><strong>This term is full.</strong></p>`}
           </div>`;
     actions = html`
       ${windowNote}
@@ -1070,6 +1080,7 @@ export async function handleConfirmPage(req, env, _params, ctx) {
         <h1>Confirming your payment…</h1>
         <p class="lede">We're waiting for the payment confirmation — this page will update automatically. You don't need to do anything.</p>
         ${sessionsList}
+        <p class="muted">Closed the payment page without paying? You can pick up where you left off from <a href="/account">your account</a>.</p>
       </div>
       <script src="/js/booking-status.js" defer></script>
     `;

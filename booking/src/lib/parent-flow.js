@@ -269,7 +269,8 @@ export async function instalmentCounts(env, userId) {
 
 // The account's waitlist entries (waiting or offered by default), with the
 // place in line: entries of the same term still waiting or offered that
-// joined earlier, plus one.
+// joined earlier, plus one. Join times have second precision, so two
+// families joining in the same second are ordered by insertion (rowid).
 const WAITLIST_STATUSES = ['waiting', 'offered', 'booked', 'declined', 'removed'];
 
 export async function listWaitlistEntries(env, userId, { termId = null, statuses = ['waiting', 'offered'] } = {}) {
@@ -280,14 +281,14 @@ export async function listWaitlistEntries(env, userId, { termId = null, statuses
             w.offer_booking_id, ch.name AS child_name, t.name AS term_name, c.name AS class_name,
             (SELECT COUNT(*) FROM waitlist w2
              WHERE w2.term_id = w.term_id AND w2.status IN ('waiting', 'offered')
-               AND (w2.joined_at < w.joined_at OR (w2.joined_at = w.joined_at AND w2.id < w.id))) + 1 AS position
+               AND (w2.joined_at < w.joined_at OR (w2.joined_at = w.joined_at AND w2.rowid < w.rowid))) + 1 AS position
      FROM waitlist w
      JOIN children ch ON ch.id = w.child_id
      JOIN terms t ON t.id = w.term_id
      JOIN classes c ON c.id = t.class_id
      WHERE w.user_id = ?1 AND (?2 IS NULL OR w.term_id = ?2)
        AND w.status IN (${wanted.map((s) => `'${s}'`).join(', ')})
-     ORDER BY w.joined_at, w.id`,
+     ORDER BY w.joined_at, w.rowid`,
   ).bind(userId, termId).all();
   return rows.results || [];
 }
