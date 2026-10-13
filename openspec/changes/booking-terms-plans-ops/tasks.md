@@ -35,10 +35,10 @@
 - [x] 2B.7 Needs-attention list and "Check with Stripe" (retrieve checkout/subscription and reconcile through the guarded path); cancel a session (reason) calling `notifySessionCancelled` and issuing credits to term families
 
 ### 2C Waitlist admin, comms, docs (owns `routes/admin-waitlist.js`, `routes/admin-email.js`, `lib/notify.js`, `lib/emails/ops.js`, cron jobs for reminders/overdue/offers, `booking/OWNER-GUIDE.md`, `README.md`, `DEPLOYMENT.md`, `MIGRATION.md`)
-- [ ] 2C.1 Waitlist admin: list per term in join order, offer (remaining term / trial / chosen weeks) creating a held pending booking with a 48-hour expiry and an email, remove, mark declined; lapsed offers release the seat and return the entry to waiting
-- [ ] 2C.2 Emails and templates: reminder the day before (idempotent via `email_log`), session cancelled (with credit note), re-enrol invitation, waitlist offer, failed instalment, offline-payment receipt; bulk email to a term's families composed by the owner
-- [ ] 2C.3 Cron jobs: reminders, overdue nudges, offer expiry; email log view in admin
-- [ ] 2C.4 Docs: `OWNER-GUIDE.md` for Camila (plain language, screen by screen), README/DEPLOYMENT (own Stripe account, subscription webhooks, billing portal, cron, `STAFF_EMAILS`, `public/` staging) and MIGRATION (terms-based import) updates
+- [x] 2C.1 Waitlist admin: list per term in join order, offer (remaining term / trial / chosen weeks) creating a held pending booking with a 48-hour expiry and an email, remove, mark declined; lapsed offers release the seat and return the entry to waiting
+- [x] 2C.2 Emails and templates: reminder the day before (idempotent via `email_log`), session cancelled (with credit note), re-enrol invitation, waitlist offer, failed instalment, offline-payment receipt; bulk email to a term's families composed by the owner
+- [x] 2C.3 Cron jobs: reminders, overdue nudges, offer expiry; email log view in admin
+- [x] 2C.4 Docs: `OWNER-GUIDE.md` for Camila (plain language, screen by screen), README/DEPLOYMENT (own Stripe account, subscription webhooks, billing portal, cron, `STAFF_EMAILS`, `public/` staging) and MIGRATION (terms-based import) updates
 
 ## 3. Integration and verification (Phase 3)
 
