@@ -44,6 +44,8 @@ export const MEDICAL_NOTES_MAX = 2000;
 const MAX_SESSIONS_PER_BOOKING = 20;
 const PARENT_KINDS = ['term', 'casual', 'trial'];
 export const CONTACT_EMAIL = 'miniandco.classes@gmail.com';
+// payments-driver names: a booking paid through the hosted checkout.
+const ONLINE_PAYMENT_PROVIDERS = ['stripe', 'mock'];
 
 export const VOUCHER_ERRORS = {
   not_found: "We couldn't find that voucher code — please check it.",
@@ -215,8 +217,8 @@ function termBlock(term, view) {
   const offerTrial = open.length > 0 && (!knownChildren || trialChildren.length > 0);
   const childSuffix = knownChildren && children.length > 1 && trialChildren.length === 1 ? `&child=${trialChildren[0].id}` : '';
 
-  const showReturningPrice = !signedIn && !offer.isReturning && offer.returningPriceCents !== null
-    && offer.returningPriceCents < offer.publicPriceCents;
+  const showReturningPrice = !signedIn && Boolean(term.previous_term_id) && !offer.isReturning
+    && offer.returningPriceCents !== null && offer.returningPriceCents < offer.publicPriceCents;
   const priceLine = html`
     <p class="term-price">${termHeadline(offer)}
       ${offer.isReturning ? html`<span class="term-returning">returning family price</span>` : ''}
@@ -1054,7 +1056,10 @@ export async function handleConfirmPage(req, env, _params, ctx) {
     // D12: the Purchase event renders at most once per booking — only the
     // request that sets purchase_tracked_at gets the data attributes (and
     // sends the server-side copy with this visitor's user agent and IP).
+    // Only payments made online through the hosted checkout count: a cash or
+    // bank-transfer payment the owner recorded is not a web conversion.
     const track = !booking.purchase_tracked_at && booking.amount_cents > 0
+      && ONLINE_PAYMENT_PROVIDERS.includes(booking.payment_provider)
       && await markPurchaseTracked(env, booking.id);
     if (track && !booking.capi_sent) {
       const report = reportPurchase(env, req, booking, user).catch((err) => logError('capi_report_failed', err, {}));

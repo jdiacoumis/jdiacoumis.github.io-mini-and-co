@@ -185,6 +185,13 @@ export async function run(ctx) {
   ctx.check('the cancel page never claims no money was taken for it', backOut.status === 303 && backOut.location === '/book/confirm?booking=e2e-pf-noseat');
   const flagged = await ctx.fetch('/account', { cookie });
   ctx.check('the account shows the payment was received', (flagged.text.match(/Payment received<\/strong> — Camila will be in touch/g) || []).length === 2);
+  ctx.sqlWrite(`INSERT INTO bookings (id, user_id, child_id, kind, term_id, status, list_amount_cents, amount_cents, paid_cents,
+                                      payment_method, payment_status, payment_provider, created_at)
+                VALUES ('e2e-pf-cash', '${user.id}', 'e2e-pf-ivy', 'casual', 'term-dev-13', 'confirmed', 3000, 3000, 3000,
+                        'offline', 'paid', 'external', ${NOW})`);
+  const cash = await ctx.fetch('/book/confirm?booking=e2e-pf-cash', { cookie });
+  ctx.check('a payment the owner recorded by hand is not reported as a web Purchase',
+    cash.text.includes("You're booked in") && !cash.text.includes('data-pixel-purchase'));
 
   ctx.section('Account credit and children');
   ctx.sqlWrite(`INSERT INTO credits (id, user_id, child_id, amount_cents, remaining_cents, reason, issued_by, issued_at, expires_at)
