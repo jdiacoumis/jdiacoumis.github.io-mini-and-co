@@ -28,7 +28,7 @@ import {
 } from '../lib/domain.js';
 import { instalmentSchedule, normaliseVoucherCode } from '../lib/pricing.js';
 import { ledgerTotals } from '../lib/ledger.js';
-import { getPaymentsDriver } from '../lib/payments-driver.js';
+import { getPaymentsDriver, isMissingResource } from '../lib/payments-driver.js';
 import { sendPurchaseEvent, markCapiSent } from '../lib/capi-driver.js';
 import { notifyBookingConfirmed } from '../lib/notify.js';
 import { waiverHtml } from '../lib/waiver.js';
@@ -714,7 +714,7 @@ export async function createHostedCheckout(env, {
   bookingId, amountCents, description, user, plan = null, exclusive = false,
 }) {
   const driver = getPaymentsDriver(env);
-  const checkout = await driver.createCheckout({
+  const options = {
     bookingId,
     amountCents,
     description,
@@ -722,7 +722,19 @@ export async function createHostedCheckout(env, {
     customerId: user.stripeCustomerId,
     mode: plan ? 'subscription' : 'payment',
     plan: plan ? { n: plan.n, eachCents: plan.eachCents, firstCents: plan.firstCents, interval: plan.interval } : null,
-  });
+  };
+  let checkout;
+  try {
+    checkout = await driver.createCheckout(options);
+  } catch (err) {
+    // The Stripe customer we remembered is not in this Stripe account (a
+    // test-mode customer after the switch to live mode, or deleted in the
+    // dashboard — review finding 10): forget it and check out by email; the
+    // webhook remembers the new customer.
+    if (!user.stripeCustomerId || !isMissingResource(err)) throw err;
+    await forgetStripeCustomer(env, user.userId, user.stripeCustomerId);
+    checkout = await driver.createCheckout({ ...options, customerId: null });
+  }
   if (!exclusive) {
     await attachPaymentRef(env, bookingId, driver.name, checkout.checkoutRef);
     return checkout.url;
@@ -740,6 +752,13 @@ export async function createHostedCheckout(env, {
     logError('checkout_expire_failed', err, { booking_id: bookingId.slice(0, 8) });
   }
   return null;
+}
+
+// Clear a remembered Stripe customer id that Stripe no longer knows.
+export async function forgetStripeCustomer(env, userId, customerId) {
+  await env.DB.prepare(`UPDATE users SET stripe_customer_id = NULL WHERE id = ?1 AND stripe_customer_id = ?2`)
+    .bind(userId, customerId).run();
+  logEvent('stripe_customer_forgotten', { user_id: String(userId).slice(0, 8) });
 }
 
 async function sendConfirmation(env, bookingId, ctx) {

@@ -11,6 +11,8 @@
     "deploy": "wrangler deploy",
     "migrate:local": "wrangler d1 migrations apply miniandco-booking --local",
     "migrate:remote": "wrangler d1 migrations apply miniandco-booking --remote",
+    "migrate:staging": "wrangler d1 migrations apply miniandco-booking-staging --env staging --remote",
+    "deploy:staging": "npm run stage && wrangler deploy --env staging",
     "seed:local": "wrangler d1 execute miniandco-booking --local --file=seed/dev-seed.sql",
     "test": "node --test test/unit/",
     "e2e": "node test/e2e/run.js"

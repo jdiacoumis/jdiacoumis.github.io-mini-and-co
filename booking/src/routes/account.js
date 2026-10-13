@@ -21,7 +21,7 @@ import {
 } from '../lib/domain.js';
 import { availableCredits } from '../lib/ledger.js';
 import { planFor, instalmentSchedule } from '../lib/pricing.js';
-import { getPaymentsDriver } from '../lib/payments-driver.js';
+import { getPaymentsDriver, isMissingResource } from '../lib/payments-driver.js';
 import { allowRate } from '../lib/ratelimit.js';
 import { logEvent, logError } from '../lib/log.js';
 import {
@@ -30,7 +30,7 @@ import {
 } from '../lib/parent-flow.js';
 import {
   bookingTitle, paymentDescription, planChoice, consentFields, readConsent, createHostedCheckout,
-  closeProviderCheckout, confirmWithoutPayment, updateCardForm, sessionsList, CONTACT_EMAIL,
+  closeProviderCheckout, confirmWithoutPayment, updateCardForm, sessionsList, CONTACT_EMAIL, forgetStripeCustomer,
 } from './booking.js';
 
 const STATUS_LABELS = {
@@ -448,6 +448,11 @@ export async function handleBillingPortal(req, env) {
     logEvent('billing_portal_opened', { user_id: user.userId.slice(0, 8) });
     return redirect(url, 303);
   } catch (err) {
+    if (isMissingResource(err)) {
+      // Not a customer in this Stripe account (any more): forget it.
+      await forgetStripeCustomer(env, user.userId, user.stripeCustomerId);
+      return redirect('/account?ok=no-card', 303);
+    }
     logError('billing_portal_failed', err, { user_id: user.userId.slice(0, 8) });
     return tryAgainPage(user, "We couldn't open the card page just now. Your instalments and your place are not affected.");
   }

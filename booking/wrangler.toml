@@ -46,3 +46,41 @@ crons = ["*/15 * * * *"]
 
 [observability.logs]
 enabled = true
+
+# --- Staging -----------------------------------------------------------------
+# `npm run deploy:staging` (wrangler deploy --env staging) publishes the same
+# code as a separate Worker on its own workers.dev address with its OWN
+# database (review finding 10), so test bookings, test emails and Stripe
+# test-mode data never touch production — and production's live keys never
+# meet test data. Secrets are per environment too:
+#   npx wrangler secret put STRIPE_SECRET_KEY --env staging   (sk_test_…)
+#   … STRIPE_WEBHOOK_SECRET, RESEND_API_KEY (DEPLOYMENT.md step 6).
+# Wrangler does not inherit vars or bindings into [env.*]: everything below
+# is repeated on purpose. The static assets, cron trigger and logs are
+# inherited. ENVIRONMENT=staging is not "development": the mock payments
+# driver, the console email driver and the /dev pages refuse to run, and
+# the real Stripe (test mode) and Resend drivers are used.
+[env.staging]
+name = "miniandco-site-staging"
+workers_dev = true
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "miniandco-booking-staging"
+# `npx wrangler d1 create miniandco-booking-staging` and paste its id here.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[env.staging.vars]
+ENVIRONMENT = "staging"
+EMAIL_DRIVER = "resend"
+PAYMENTS_DRIVER = "stripe"
+# The staging Worker's own address (Workers → miniandco-site-staging →
+# Domains & Routes shows it): every email link and Stripe return URL uses it.
+PUBLIC_BASE_URL = "https://miniandco-site-staging.REPLACE-WITH-YOUR-SUBDOMAIN.workers.dev"
+EMAIL_FROM = "Mini & Co. (staging) <bookings@miniandcosensoryclasses.com>"
+EMAIL_REPLY_TO = "miniandco.classes@gmail.com"
+ADMIN_EMAILS = "miniandco.classes@gmail.com"
+STAFF_EMAILS = ""
+META_PIXEL_ID = ""
+WAIVER_VERSION = "2026-05-14"
