@@ -11,7 +11,7 @@ itself is what matters.
 
 ## 1. Cloudflare account and Worker
 
-1. Create/log in to a Cloudflare account (free plan is sufficient) and add the
+1. Create/log in to a Cloudflare account and add the
    `miniandcosensoryclasses.com` zone (Cloudflare will list the nameservers to
    set at the registrar — doing this early lets DNS settle before cutover;
    keep the existing GitHub Pages DNS records when importing).
@@ -23,6 +23,19 @@ itself is what matters.
    # paste the returned database_id into wrangler.toml ([[d1_databases]])
    npx wrangler d1 migrations apply miniandco-booking --remote
    ```
+
+   (Staging has its own database — step 6.)
+
+**Which Workers plan.** The free plan runs everything, but it allows each
+request at most 50 queries to D1 and 50 subrequests (`fetch` to Stripe,
+Resend, Meta). The busiest owner actions are built to stay under that: a
+cancelled class is one fixed-size batch however many families are booked,
+auto-enrol holds one family per step and bulk email sends 12 per step, both
+carrying on by themselves (see README → Limits). Whether D1 counts each
+statement of a batch separately is not documented; if a page ever fails with
+"Too many API requests by single Worker invocation" (Workers Logs), or the
+site outgrows the free daily limits, switch to **Workers Paid** (US$5/month:
+1,000 D1 queries and 10,000 subrequests per request) — no code change needed.
 
 ## 2. Secrets and settings
 
@@ -39,7 +52,7 @@ Plain vars (in `wrangler.toml [vars]`):
 
 | Var | Purpose |
 | --- | --- |
-| `ENVIRONMENT` | `production` (the mock payments driver, console email driver and `/dev/*` pages refuse to run otherwise) |
+| `ENVIRONMENT` | `production` (or `staging` for the staging Worker). The mock payments driver, console email driver and `/dev/*` pages run only under `development` (local) and refuse in both |
 | `EMAIL_DRIVER` / `PAYMENTS_DRIVER` | `resend` / `stripe` (an unknown value fails closed) |
 | `PUBLIC_BASE_URL` | The site's address, used in every email link (account, Pay now, Update card) and in Stripe return URLs |
 | `EMAIL_FROM` | `Mini & Co. <bookings@miniandcosensoryclasses.com>` — must be a verified Resend domain (it need not receive mail — see `EMAIL_REPLY_TO`) |
@@ -60,9 +73,22 @@ instalments, class-cancelled summaries) at every `ADMIN_EMAILS` address.
    developer account. Invite James as a team member with developer access so
    he can create keys and webhooks without owning the account.
 2. Stay in **test mode** until step 6 has been verified end to end.
-3. **Webhook** — Developers → Webhooks → Add endpoint (check):
-   - URL: `https://<your-worker>.workers.dev/api/stripe/webhook` (update to
-     the real domain after cutover, or register both).
+3. **API version.** Every request the Worker makes names the Stripe API
+   version it is written for — `Stripe-Version: 2025-08-27.basil`
+   (`STRIPE_API_VERSION` in `src/lib/payments-driver.js`) — so the account's
+   default version (Workbench) doesn't matter for those. Webhook events,
+   though, are written in the **webhook endpoint's** version: create every
+   endpoint with that same version (below). Moving to a newer version is an
+   upgrade: read Stripe's changelog, change the constant, repeat step 6 in
+   test mode, then update the endpoints.
+4. **Webhook** — Developers → Webhooks → Add endpoint (check):
+   - URL: `https://miniandco-site-staging.<subdomain>.workers.dev/api/stripe/webhook`
+     for staging (test mode); the live endpoint for the real domain comes at
+     go-live (step 7).
+   - **API version: `2025-08-27.basil`** — choose it when creating the
+     endpoint (or `stripe webhook_endpoints create … --api-version
+     2025-08-27.basil`); an endpoint left on the account default would send
+     events in a shape the code doesn't read.
    - Events — exactly these six:
      `checkout.session.completed`, `checkout.session.expired`,
      `invoice.paid`, `invoice.payment_failed`,
@@ -71,8 +97,9 @@ instalments, class-cancelled summaries) at every `ADMIN_EMAILS` address.
      checkout and invoice events; later instalments through `invoice.*`;
      the end of a plan through `customer.subscription.deleted`; refunds made
      in the dashboard through `charge.refunded`.)
-   - Copy the signing secret into `STRIPE_WEBHOOK_SECRET`.
-4. **Customer portal** (where "Update card" on the account page goes) —
+   - Copy the signing secret into `STRIPE_WEBHOOK_SECRET` (per environment:
+     `--env staging` for the staging one).
+5. **Customer portal** (where "Update card" on the account page goes) —
    Settings → Billing → Customer portal (check): activate the default
    configuration and set:
    - **Payment methods: allow customers to update** — on.
@@ -81,22 +108,30 @@ instalments, class-cancelled summaries) at every `ADMIN_EMAILS` address.
    - **Switch plans / update quantities: off.**
    - Business information: name, Terms & Conditions and privacy links.
    The portal configuration is separate in test and live mode — set both.
-5. **Failed payments** — Settings → Billing → Revenue recovery (check):
+6. **Failed payments** — Settings → Billing → Revenue recovery (check):
    - **Smart Retries: on** (Stripe's recommended schedule, about 8 tries over
      2 weeks). The booking keeps its place throughout; the family is emailed
      once per failed instalment and weekly while overdue, and the owner sees
      it under Needs attention.
    - **If all retries fail: cancel the subscription.** The booking is then
      flagged "Instalment plan ended before the full amount was paid" for the
-     owner to sort out (she can record the rest as an offline payment).
+     owner to sort out (Mark as sorted asks whether the rest is still owed or
+     written off); the family stops getting overdue reminders.
+   - Cancelling a subscription (Stop plan, a plan paid off another way, a
+     cancelled booking) also stops Stripe collecting its open invoices — the
+     default; leave it so.
    - Stripe's own customer emails for failed payments and expiring cards can
      stay on; ours are separate and say the same thing.
-6. **Payment methods**: cards only at launch (Settings → Payment methods).
-7. **Test cards**: `4242 4242 4242 4242` (succeeds), `4000 0027 6000 3184`
+7. **Payment methods**: cards only at launch (Settings → Payment methods).
+8. **Test cards**: `4242 4242 4242 4242` (succeeds), `4000 0027 6000 3184`
    (needs 3-D Secure), `4000 0000 0000 0341` (saves, then fails when charged
    — use it to test a failed instalment); any future expiry and CVC.
-8. **Refunds** are made in the Stripe dashboard (Payments → the payment →
-   Refund); `charge.refunded` records them in the booking's ledger.
+9. **Refunds** are made in the Stripe dashboard (Payments → the payment →
+   Refund); `charge.refunded` records them in the booking's ledger — found by
+   the payment intent (each instalment's is stored when it is paid), with the
+   refund list fetched from Stripe — and Check with Stripe adds any whose
+   webhook was lost. Money returned by hand is recorded with **Record a
+   refund** on the booking.
 
 ## 4. Resend and replies
 
@@ -137,26 +172,45 @@ lists the cron, and Workers Logs show `cron_job_done` lines every 15 minutes
 
 ## 6. Staging deploy and verification
 
+Staging is a **separate Worker** (`miniandco-site-staging`, on its
+`workers.dev` address) with its **own database** (`miniandco-booking-staging`)
+and its own secrets — `[env.staging]` in `wrangler.toml`. Test bookings, test
+emails and Stripe test-mode data never touch production, and the production
+Worker never holds test keys. `ENVIRONMENT = "staging"` uses the real Stripe
+(test mode) and Resend drivers; the mock drivers and `/dev/*` pages refuse to
+run there.
+
 ```bash
-npm run deploy             # stages booking/public, then deploys to <name>.workers.dev
+npx wrangler d1 create miniandco-booking-staging
+# paste its database_id into [[env.staging.d1_databases]] in wrangler.toml
+npm run migrate:staging                                  # wrangler d1 migrations apply … --env staging --remote
+npx wrangler secret put STRIPE_SECRET_KEY --env staging      # sk_test_…
+npx wrangler secret put STRIPE_WEBHOOK_SECRET --env staging  # the test-mode endpoint's whsec_…
+npx wrangler secret put RESEND_API_KEY --env staging
+npm run deploy:staging                                   # stages booking/public, then wrangler deploy --env staging
 ```
 
-Always deploy with `npm run deploy` (or run `npm run stage` first): the Worker
-serves static files only from `booking/public`, which
-`scripts/stage-assets.mjs` rebuilds from the allow-list (`index.html`,
-`classes.html`, `about.html`, `contact.html`, `css/`, `js/`, `assets/`,
-`robots.txt`, `sitemap.xml`; dotfiles, symlinks and files over 25 MiB
-skipped). A plain `wrangler deploy` would publish whatever `public/` last
-held. To publish a new top-level file, add it to `ALLOW_LIST` in that script.
+Then set `PUBLIC_BASE_URL` in `[env.staging.vars]` to the staging Worker's
+address (Workers → miniandco-site-staging → Domains & Routes) — every email
+link and Stripe return URL uses it — and deploy again. Secrets are per
+environment: `wrangler secret put NAME` (no `--env`) sets production's, which
+should get **live** keys only at go-live (step 7).
 
-Note: `PUBLIC_BASE_URL` is used in emails and Stripe return URLs. For staging
-verification, temporarily set it to the `workers.dev` URL (and back before the
-production deploy), or test with that caveat in mind.
+Always deploy with `npm run deploy` / `npm run deploy:staging` (or run
+`npm run stage` first): the Worker serves static files only from
+`booking/public`, which `scripts/stage-assets.mjs` rebuilds from the
+allow-list (`index.html`, `classes.html`, `about.html`, `contact.html`,
+`css/`, `js/`, `assets/`, `robots.txt`, `sitemap.xml`; dotfiles, symlinks and
+files over 25 MiB skipped) and to which it adds `_headers` (security headers
+for the static pages: HSTS, nosniff, referrer policy, no framing). A plain
+`wrangler deploy` would publish whatever `public/` last held. To publish a new
+top-level file, add it to `ALLOW_LIST` in that script.
 
-Verify on the `workers.dev` URL with Stripe in test mode:
+Verify on the staging `workers.dev` URL with Stripe in test mode:
 
-1. Marketing pages render; `/booking/src/index.js`, `/openspec/…` and
-   `/.dev.vars` are 404.
+1. Marketing pages render (with `Strict-Transport-Security` and
+   `X-Frame-Options: DENY` on them); `/booking/src/index.js`, `/openspec/…`
+   and `/.dev.vars` are 404.
 2. Sign in via magic link (real email through Resend); reply to it and check
    the reply reaches the Gmail inbox (the Reply-To, step 4.4).
 3. Create a term (both classes), open it, and book it as a parent: pay in
@@ -177,7 +231,7 @@ Verify on the `workers.dev` URL with Stripe in test mode:
    2. Stripe dashboard (test mode) → Billing → **Test clocks** → new
       simulation, frozen at now → add a customer (the test family's email).
       Link it to the family so the checkout reuses it:
-      `npx wrangler d1 execute miniandco-booking --remote --command "UPDATE users SET stripe_customer_id = 'cus_…' WHERE email = '…'"`.
+      `npx wrangler d1 execute miniandco-booking-staging --env staging --remote --command "UPDATE users SET stripe_customer_id = 'cus_…' WHERE email = '…'"`.
    3. Book the term by instalments, pay with `4242…`. In Stripe the
       subscription shows **Cancels** on the first payment's date + 2 weeks;
       the grid shows "Plan 1 of 2".
@@ -205,12 +259,18 @@ Verify on the `workers.dev` URL with Stripe in test mode:
 
 ## 7. Go-live and DNS cutover
 
-1. Switch Stripe to live mode: replace `STRIPE_SECRET_KEY`, create a live
-   webhook endpoint for `https://miniandcosensoryclasses.com/api/stripe/webhook`
-   with the same six events (new `STRIPE_WEBHOOK_SECRET`), and repeat the
-   customer portal and Smart Retries settings in live mode.
-2. Confirm `PUBLIC_BASE_URL=https://miniandcosensoryclasses.com` and
-   `npm run deploy`.
+1. Switch Stripe to live mode for production: `npx wrangler secret put
+   STRIPE_SECRET_KEY` (no `--env`: production) with the `sk_live_…` key,
+   create a live webhook endpoint for
+   `https://miniandcosensoryclasses.com/api/stripe/webhook` with the same six
+   events **and API version `2025-08-27.basil`** (its secret into
+   `STRIPE_WEBHOOK_SECRET`), set `RESEND_API_KEY`, and repeat the customer
+   portal and Smart Retries settings in live mode. (A family's Stripe customer
+   remembered from test mode is not in the live account: the next checkout
+   forgets it and uses their email — nothing to clean up.)
+2. Apply the migrations to the production database
+   (`npm run migrate:remote`), confirm
+   `PUBLIC_BASE_URL=https://miniandcosensoryclasses.com` and `npm run deploy`.
 3. In the Cloudflare dashboard → Workers → your Worker → **Domains & Routes**:
    add the custom domain `miniandcosensoryclasses.com` (and `www` if wanted).
    Cloudflare creates the DNS records on the zone; remove/disable the old
@@ -241,11 +301,15 @@ Verify on the `workers.dev` URL with Stripe in test mode:
   failed reminders and nudges are retried by the next cron run. Resend's
   dashboard shows delivery and bounces.
 - **Migrations**: new schema changes go in `booking/migrations/000N_*.sql`,
-  applied with `wrangler d1 migrations apply miniandco-booking --remote`.
+  applied with `npm run migrate:staging` first, then `npm run migrate:remote`
+  (production).
 - **Webhook outage**: confirmation pages poll booking status and Stripe
   retries webhooks for days. A booking stuck waiting after a real payment
   appears under **Needs attention** after 40 minutes; **Check with Stripe**
   replays Stripe's record through the webhook's own handlers (the same
   capacity-guarded confirmation, ledger rows keyed on Stripe ids, so nothing
   is recorded twice) — and for an instalment plan it lists the subscription's
-  invoices and adds any paid instalment whose `invoice.paid` never arrived.
+  invoices and adds any paid instalment whose `invoice.paid` never arrived,
+  sets a missing end date (`cancel_at`) and stops a plan that is fully paid;
+  for every booking it lists the refunds of its payment intents and adds any
+  whose `charge.refunded` never arrived.

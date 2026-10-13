@@ -989,7 +989,7 @@ const AUTO_ENROL_ERRORS = {
 
 // Auto-enrol runs one family per request (each held place costs about 20
 // database queries and an email; Cloudflare caps a request at 50 queries on
-// the free plan — README → Scheduled work and limits). The result page
+// the free plan — README → Limits). The result page
 // carries the families still to do in a "Continue" form, which
 // js/admin-continue.js submits by itself; without JavaScript the owner
 // presses it.

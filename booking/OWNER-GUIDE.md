@@ -49,7 +49,8 @@ There are no passwords.
    until you press **Sign out** in the menu.
 
 If the email doesn't come: check Spam/Promotions, then ask for a new link.
-You can ask for 3 links an hour.
+You can ask for 3 links an hour from one phone or computer (someone asking
+for links in your name somewhere else never uses yours up).
 
 Only the addresses on the admin list can open the admin pages. Adding or
 removing an admin is a quick change James makes (the `ADMIN_EMAILS` setting);
@@ -97,13 +98,18 @@ both (there's an option to create them together).
 **Terms → New term** (or **New term for this class** under a class):
 
 1. **Class (weekly slot)** — choose the class, and under **Also create the
-   same term for** tick the other Wednesday class to create both at once (each
-   gets its own term, with its own places).
+   same term for** tick the other classes to create them at once (each gets
+   its own term, with its own places). A class on another day runs in the
+   **same weeks**: with a Wednesday term starting Wed 3 Feb, a Monday class
+   starts Mon 1 Feb.
 2. **Term name**, e.g. **Term 1 2027**.
-3. **First class date** (it must be on the class's day, e.g. a Wednesday),
-   then either the **Number of weeks** (count holiday weeks too) **or the last
-   class date**, and any **Holiday dates to skip**. A class is created for
-   every week in between, at the class's usual time.
+3. **First class date** (it must be on the first class's day, e.g. a
+   Wednesday), then either the **Number of weeks** (count holiday weeks too)
+   **or the last class date**, and any **Holiday weeks to skip**: type any date
+   in a holiday week and that whole week (Monday to Sunday) is skipped for
+   every class you're creating. A class is created for every other week, at
+   the class's usual time. If a holiday date isn't in any week of the term
+   (a typo?), the next page tells you.
 4. Enter the prices and options below. Tick **Open for bookings straight
    away** if families may book now; otherwise the term is a **Draft** that
    families can't see yet (section 4). Press **Create term**.
@@ -195,6 +201,8 @@ this too (section 16). **Rosters** in the menu lists last week's and the coming
 weeks' classes, each linking to its roster.
 
 **Download roster CSV** gives you a spreadsheet of the class (admins only).
+The payment column is only on your roster — your facilitator doesn't see who
+has paid or owes.
 
 ## 7. Manual bookings and pay-later
 
@@ -231,6 +239,13 @@ online payment the family had started is stopped so they can't pay twice. The
 family is emailed a receipt. Pressing the button twice by accident only
 records the payment once.
 
+If the family is **paying by instalments**, the form warns you that Stripe is
+still taking them. When what you record covers **everything still owed**, the
+instalment plan is **stopped automatically** — Stripe takes nothing more — and
+the page says so. If it covers only part, Stripe carries on with the
+remaining instalments (and keeps retrying a failed one), so press **Stop
+plan** first if they're paying the rest another way (section 13).
+
 ## 8. Transfers, cancelling a week, cancelling a class
 
 All of these are on the booking (**Bookings →** open the booking; each week is
@@ -245,24 +260,35 @@ listed under **Weeks**):
   $168 six-week term) and you can change it (0 for none).
 - **Cancel booking…** → **Yes, cancel the booking**: all their places are freed.
   If they were paying by instalments, the plan is stopped so no more payments
-  are taken. Any refund is done in Stripe (section 14). **Restore booking**
+  are taken. Any refund is done in Stripe (section 14). If the family was on
+  the payment page and had **just paid**, the booking isn't cancelled — it's
+  confirmed and the payment recorded, and the page tells you; cancel again if
+  you still want to (the payment then needs refunding). **Restore booking**
   brings a cancelled booking back — only if every week still to come has a
   free place.
+- **Stop plan…** (on any booking still paying by instalments — even a
+  cancelled or flagged one) → **Yes, stop the plan**: Stripe takes no more
+  instalments. The child keeps their place; anything still owed stays owing
+  on the booking (record it when they pay another way).
 
 **Cancelling a whole class** (venue closed, you're unwell): **Cancel** next to
 it on the Schedule, **Cancel this session…** on its Edit page, or **Cancel
 session** on its roster:
 
 1. The page lists every family booked into it and the credit each will get.
+   Each credit is filled in for you and you can change it (0 for none) — for
+   example for a family you brought over from ClassForKids on a special price.
    Type a short **Reason (shown to families)**, e.g. "venue closed", and press
    **Yes, cancel the session**.
-2. Every family who has paid for that class gets a credit automatically — a
-   term family that week's share of the term, a casual or trial family what
-   they paid — and their place in it is cancelled. (A place still waiting to be
-   paid, or a complimentary one, gets no credit.)
+2. Every family who has paid for that class gets their credit — a term family
+   that week's share of what they paid, a casual or trial family what they
+   paid — and their place in it is cancelled. A place **still waiting to be
+   paid** (pay-later, an offer, a re-enrolment) gets no credit: its price goes
+   down by that week's share instead, so **Pay now** asks for the right amount.
+   A complimentary place gets neither.
 3. Every family is emailed: "Class cancelled", with the reason and the credit
-   they've been given. You get a summary email listing how many families were
-   told and the total credit.
+   they've been given (or how much less their place now costs). You get a
+   summary email listing how many families were told and the total credit.
 4. The class shows as Cancelled; nobody can book it and no reminder is sent.
 
 ## 9. Credits and vouchers
@@ -358,6 +384,8 @@ when one appears:
 | Instalment plan ended before the full amount was paid | Stripe stopped trying; money is still owed. |
 | Payment doesn't match the booking | Stripe reported an amount that isn't what the booking owes. |
 | Account credit was no longer available | A late payment confirmed a booking but some credit had already been used elsewhere. |
+| Paid more than the booking costs | More money has come in than the booking costs — for example a card instalment went through after they'd paid the rest by transfer. Refund the difference (section 14) or give it as a credit. |
+| Fully paid, but the instalment plan couldn't be stopped in Stripe | Everything is paid but Stripe didn't answer when asked to stop the instalments. Press **Stop plan** on the booking (or cancel the subscription in the Stripe dashboard). |
 
 Under **Payments to check** it also lists bookings that have been waiting for an
 online payment for more than 40 minutes, and (folded away) online payments
@@ -370,10 +398,14 @@ What you can do on each:
   and the place is free, the booking is confirmed and the payment recorded
   (never twice). If they didn't pay, the held place is released. For a family
   paying by instalments it also adds any instalment Stripe collected that is
-  missing here, and tells you how the plan stands.
-- **Record payment** (on the booking), **Cancel**, or **Mark as sorted** with a
-  short note of what you did (for example after a phone call) — the note is
-  kept on the booking.
+  missing here, gives the plan its end date if it has none, stops it if
+  everything is paid, and tells you how the plan stands. It also adds any
+  refund made in Stripe that is missing from the booking's payments.
+- **Record payment** (on the booking), **Stop plan**, **Cancel**, or **Mark as
+  sorted** with a short note of what you did (for example after a phone call)
+  — the note is kept on the booking. For "Instalment plan ended before the
+  full amount was paid", Mark as sorted also asks what happens to the money
+  still owed (section 13).
 
 For **Paid, but no seat**: raise the number of places and press **Check with
 Stripe** again (it confirms the booking once a place is free), move them to
@@ -420,6 +452,8 @@ class, each failed instalment, and a waitlist offer that lapsed or was declined.
    and exactly how it looks. Nothing is sent yet.
 4. Press **Send to N families**. Each family gets their own copy — nobody sees
    anyone else's address. Pressing Send twice is safe: nobody gets it twice.
+   Emails go out 12 at a time: for a bigger group the page carries on by
+   itself until everyone has it (press **Continue** if it ever stops).
 
 Use this for news about the classes families are booked into or waiting for.
 For promotions (a new term to past families, say), use a mailing-list tool with
@@ -430,8 +464,9 @@ an unsubscribe link — that's the law for marketing emails (Spam Act).
 On the **Email** page, follow the **email log** link (or go to
 **/admin/email/log**). It lists every email
 the system has sent, newest first, with who it went to, what it was, the term
-and whether it was sent or failed. Filter by type, term, part of an email
-address, or failed only. When a family says "I never got it", search their
+and whether it was sent, failed, or is "not confirmed yet" (it was being sent
+when something went wrong; it's tried again automatically). Filter by type,
+term, part of an email address, or status. When a family says "I never got it", search their
 address here. Sign-in links aren't listed (they're private). A failed reminder
 is tried again automatically.
 
@@ -443,33 +478,56 @@ card, not enough money):
 1. **Stripe tries the card again automatically** over the following days.
 2. **The family is emailed** with a link to update their card (their account →
    **Update card**, which opens Stripe's secure page). While it's still overdue
-   they get a gentle reminder at most once a week.
+   — and Stripe is still trying — they get a gentle reminder at most once a
+   week.
 3. **You're emailed**, and the booking shows **Overdue $…** in the term grid and
    under **Needs attention**.
 4. **The child keeps their place.** Nothing is cancelled automatically — you decide.
 
 What to do:
 
-- Usually nothing for a few days — most failed payments go through on a retry,
-  and the flag clears itself.
-- If they pay you another way, **Record offline payment** on the booking.
-- If Stripe stops trying ("plan ended before the full amount was paid"), contact
-  the family: take the rest by bank transfer and record it, or cancel the weeks
-  left, or keep them on — your call.
+- **Usually nothing** for a few days — most failed payments go through on a
+  retry once the family updates their card, and the flag clears itself.
+- **They pay everything that's left another way** (say $140 by bank
+  transfer): **Record offline payment** for it. That covers the whole price,
+  so the instalment plan is **stopped automatically** — Stripe takes nothing
+  more, the overdue flag clears and the booking shows Paid.
+- **They pay part another way** (say the missed $28) but want the card to
+  carry on: don't record it while Stripe is still retrying that payment, or
+  it can be taken twice — ask them to update their card instead. If they'd
+  rather pay all the rest themselves, press **Stop plan**, then record what
+  they pay.
+- **Stripe stops trying** ("Instalment plan ended before the full amount was
+  paid"): no more reminders go to the family. Contact them, then **Mark as
+  sorted** and choose what happens to the money still owed:
+  - **They'll pay it another way — keep it owing**: the booking shows "Part
+    paid — owes $…"; record it when it comes.
+  - **Write it off**: the rest is written off and the booking counts as paid.
+- If money is ever taken twice, the booking is flagged **Paid more than the
+  booking costs** — refund the difference (section 14).
 
 ## 14. When a family wants a refund
 
-Refunds are made in **Stripe**, not in the booking pages:
+Card refunds are made in **Stripe**, not in the booking pages:
 
 1. Sign in to the **Stripe dashboard** → **Payments**.
 2. Find the payment (search the parent's email or the amount).
 3. **Refund** → full or partial amount → reason → confirm.
 
 The booking system hears about the refund automatically and records it in the
-booking's payments. It does **not** cancel the booking — so if they're leaving,
+booking's payments (if one ever seems missing, **Check with Stripe** on the
+booking adds it). It does **not** cancel the booking — so if they're leaving,
 also **cancel the booking** (or the weeks) in the admin so the places are freed.
-If they're on instalments, cancel the booking first: that stops the plan, so
-no more payments are taken (cancelling single weeks does not).
+If they're on instalments, cancel the booking first (or press **Stop plan**):
+that stops the plan, so no more payments are taken (cancelling single weeks
+does not).
+
+**Money you give back yourself** (cash, or a bank transfer from your account):
+on the booking, under Payments, **Record a refund** → the amount, how you paid
+it back and the reason → **Record refund**. It's listed with the payments; you
+can't record more than they paid. A refund never changes whether the booking
+counts as paid — cancel the booking or weeks too if they're leaving. Don't
+record card refunds made in Stripe this way (they appear by themselves).
 
 Rather give a credit than a refund? Give a credit (section 9) — no Stripe needed.
 Your Terms & Conditions set out the policy (48 hours' notice for a credit or
@@ -488,13 +546,18 @@ To set up next term for the families you already have:
 2. You go straight to **Hold places for returning families**: this term's
    families (term bookings ticked; trial, casual and complimentary families
    listed unticked). Untick anyone who isn't coming back, then press **Hold
-   places and send invitations**. (Later: **Auto-enrol returning families** on
+   places and send invitations**. Places are held one family at a time, so
+   the page carries on by itself until everyone ticked is done (press
+   **Continue** if it ever stops). (Later: **Auto-enrol returning families** on
    the new term's page.)
 3. Each family gets a **place held at the returning price** (less any account
    credit) until the "everyone can book from" time (or 7 days if there isn't
    one, or it's less than an hour away), and an email: "<child>'s place in
    <term> is saved — pay by <date>". They sign in and press **Pay now** (in
-   full or by instalments). Running it again never holds a place twice.
+   full or by instalments). Running it again never holds a place twice; if a
+   family's held place ran out and you run it again, they get a new place and
+   a new invitation. The results page says, for each family, whether the
+   invitation was sent — if it couldn't be, contact them yourself.
 4. **Open for bookings** on the new term when you're ready. Returning families
    can then book other children early at the returning price; everyone else
    sees "Bookings open …" until the public opening. Held places that aren't
@@ -503,7 +566,8 @@ To set up next term for the families you already have:
 ## 16. The facilitator's roster-only login
 
 A casual facilitator can open rosters and mark attendance — nothing else: no
-payments, no family list, no emails, no other admin pages.
+payments (their roster doesn't show who has paid), no family list, no emails,
+no other admin pages.
 
 - **To give access**: ask James to add their email to the staff list
   (`STAFF_EMAILS`). They sign in the same way as everyone (an emailed link).
@@ -525,5 +589,10 @@ payments, no family list, no emails, no other admin pages.
 - **A family says the class is full** → add them to the waitlist; offer a place
   when one comes up.
 - **Something looks wrong with a payment** → Needs attention → Check with Stripe.
+- **A family on instalments paid the rest by transfer** → Record offline
+  payment on the booking; the plan stops by itself.
+- **Stop someone's instalments** → the booking → Stop plan.
+- **You paid a family back in cash or by transfer** → the booking → Record a
+  refund.
 - **Download everything** → Bookings → Download bookings CSV; each term grid
   and each roster has its own CSV. James can take a full backup at any time.
