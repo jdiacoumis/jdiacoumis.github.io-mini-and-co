@@ -168,11 +168,11 @@ export async function run(ctx) {
   ctx.section('Money that arrived when the place could not be honoured');
   ctx.sqlWrite(`INSERT INTO bookings (id, user_id, child_id, kind, term_id, status, list_amount_cents, amount_cents, paid_cents,
                                       payment_status, needs_attention, created_at, expires_at)
-                VALUES ('e2e-pf-noseat', '${user.id}', 'e2e-pf-ivy', 'casual', 'term-dev-13', 'expired', 3000, 3000, 3000, 'paid',
+                VALUES ('e2e-pf-noseat', '${user.id}', 'e2e-pf-ivy', 'casual', '${termId}', 'expired', 3000, 3000, 3000, 'paid',
                         'paid_no_seat', ${at(-1)}, ${at(-0.9)})`);
   ctx.sqlWrite(`INSERT INTO bookings (id, user_id, child_id, kind, term_id, status, list_amount_cents, amount_cents, paid_cents,
                                       payment_status, needs_attention, created_at, cancelled_at)
-                VALUES ('e2e-pf-latepay', '${user.id}', 'e2e-pf-ivy', 'casual', 'term-dev-13', 'cancelled', 3000, 3000, 3000, 'paid',
+                VALUES ('e2e-pf-latepay', '${user.id}', 'e2e-pf-ivy', 'casual', '${termId}', 'cancelled', 3000, 3000, 3000, 'paid',
                         'paid_after_cancel', ${at(-1)}, ${at(-0.5)})`);
   const noSeat = await ctx.fetch('/book/confirm?booking=e2e-pf-noseat', { cookie });
   ctx.check('paid but no seat: the payment is acknowledged and Camila will be in touch',
@@ -187,7 +187,7 @@ export async function run(ctx) {
   ctx.check('the account shows the payment was received', (flagged.text.match(/Payment received<\/strong> — Camila will be in touch/g) || []).length === 2);
   ctx.sqlWrite(`INSERT INTO bookings (id, user_id, child_id, kind, term_id, status, list_amount_cents, amount_cents, paid_cents,
                                       payment_method, payment_status, payment_provider, created_at)
-                VALUES ('e2e-pf-cash', '${user.id}', 'e2e-pf-ivy', 'casual', 'term-dev-13', 'confirmed', 3000, 3000, 3000,
+                VALUES ('e2e-pf-cash', '${user.id}', 'e2e-pf-ivy', 'casual', '${termId}', 'confirmed', 3000, 3000, 3000,
                         'offline', 'paid', 'external', ${NOW})`);
   const cash = await ctx.fetch('/book/confirm?booking=e2e-pf-cash', { cookie });
   ctx.check('a payment the owner recorded by hand is not reported as a web Purchase',

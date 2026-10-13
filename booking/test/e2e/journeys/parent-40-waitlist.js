@@ -32,6 +32,21 @@ function createFullTerm(ctx) {
                 SELECT 'e2e-pf-wfill-booking', id, 'booked' FROM class_sessions WHERE term_id = '${TERM}'`);
 }
 
+// A term with plenty of places.
+function createOpenTerm(ctx) {
+  ctx.sqlWrite(`INSERT INTO classes (id, name, description, venue, age_range, weekday, start_time, default_duration_mins,
+                                     default_capacity, active, created_at)
+                VALUES ('cls-pf-open', 'PF Open Class', 'An e2e class.', 'Test Hall', '3–12 months', 2, '13:00', 45, 12, 1, ${NOW})`);
+  ctx.sqlWrite(`INSERT INTO terms (id, class_id, name, starts_on, ends_on, term_price_cents, casual_price_cents, plan_instalments,
+                                   plan_interval, status, created_at)
+                VALUES ('term-pf-open', 'cls-pf-open', 'Open Term', date('now', '3 days'), date('now', '17 days'), 9000, 3000, 0, 'week', 'open', ${NOW})`);
+  const rows = Array.from({ length: 3 }, (_, i) => `('term-pf-open-w${i + 1}', 'cls-pf-open', 'term-pf-open', ${at(3 + 7 * i)},
+    45, 12, 3000, 'scheduled', ${NOW})`);
+  ctx.sqlWrite(`INSERT INTO class_sessions (id, class_id, term_id, starts_at, duration_mins, capacity, casual_price_cents, status, created_at)
+                VALUES ${rows.join(', ')}`);
+  return 'term-pf-open';
+}
+
 async function family(ctx, email, childName) {
   const cookie = await ctx.signIn(email);
   const csrf = await ctx.csrfFor(cookie);
@@ -105,11 +120,12 @@ export async function run(ctx) {
     rejoined.text.includes('Ada</strong> is on the waitlist — number 2 in line') && entry(ctx, ada.childId)[0].status === 'waiting');
 
   ctx.section('A term with places');
-  const open = await ctx.fetch('/book/waitlist?term=term-dev-13', { cookie: ada.cookie });
-  ctx.check('a term with places sends the family to book', open.text.includes('no need to wait') && open.text.includes('kind=term&amp;term=term-dev-13'));
-  const notFull = await ctx.fetch('/book/waitlist', { method: 'POST', cookie: ada.cookie, body: { csrf: ada.csrf, term: 'term-dev-13', child: ada.childId } });
+  const openTerm = createOpenTerm(ctx);
+  const open = await ctx.fetch(`/book/waitlist?term=${openTerm}`, { cookie: ada.cookie });
+  ctx.check('a term with places sends the family to book', open.text.includes('no need to wait') && open.text.includes(`kind=term&amp;term=${openTerm}`));
+  const notFull = await ctx.fetch('/book/waitlist', { method: 'POST', cookie: ada.cookie, body: { csrf: ada.csrf, term: openTerm, child: ada.childId } });
   ctx.check('and does not add a waitlist entry',
-    notFull.location.endsWith('ok=places') && ctx.sql(`SELECT COUNT(*) AS n FROM waitlist WHERE term_id = 'term-dev-13' AND child_id = '${ada.childId}'`)[0].n === 0);
+    notFull.location.endsWith('ok=places') && ctx.sql(`SELECT COUNT(*) AS n FROM waitlist WHERE term_id = '${openTerm}' AND child_id = '${ada.childId}'`)[0].n === 0);
   const strangersChild = await ctx.fetch('/book/waitlist', { method: 'POST', cookie: ada.cookie, body: { csrf: ada.csrf, term: TERM, child: bo.childId } });
   ctx.check("a family can't add someone else's child", strangersChild.status === 404);
 
@@ -140,5 +156,5 @@ export async function run(ctx) {
   const adaAfter = await ctx.fetch('/account', { cookie: ada.cookie });
   ctx.check('the booked entry leaves the waitlist list', !adaAfter.text.includes('id="waitlist"'));
 
-  ctx.sqlWrite(`UPDATE terms SET status = 'closed' WHERE id = '${TERM}'`);
+  ctx.sqlWrite(`UPDATE terms SET status = 'closed' WHERE id IN ('${TERM}', '${openTerm}')`);
 }

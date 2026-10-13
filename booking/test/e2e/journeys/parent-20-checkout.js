@@ -34,6 +34,7 @@ const bookingRef = (location) => ({
 
 export async function run(ctx) {
   const termId = createTerm(ctx, { key: 'pf-plan', className: 'PF Plan Class', termName: 'Plan Term', weeks: 3, termPrice: 10000, plan: 3 });
+  const casualTerm = createTerm(ctx, { key: 'pf-casual', className: 'PF Casual Class', termName: 'Casual Term', weeks: 3, termPrice: 9000, plan: 0 });
   const cookie = await ctx.signIn(EMAIL);
   const csrf = await ctx.csrfFor(cookie);
   await ctx.fetch('/account/children/new', {
@@ -109,22 +110,24 @@ export async function run(ctx) {
   ctx.section('Voucher and account credit');
   ctx.sqlWrite(`INSERT INTO credits (id, user_id, amount_cents, remaining_cents, reason, issued_by, issued_at, expires_at)
                 VALUES ('e2e-pf-credit', '${user.id}', 1000, 1000, 'Goodwill', 'admin', ${NOW}, ${at(30)})`);
+  ctx.sqlWrite(`INSERT INTO vouchers (code, kind, value, applies_to, active, created_at)
+                VALUES ('PFFIVE', 'amount', 500, 'any', 1, ${NOW})`);
   ctx.sqlWrite(`INSERT INTO vouchers (code, kind, value, applies_to, valid_until, active, created_at)
                 VALUES ('OLDIE', 'amount', 500, 'any', ${at(-1)}, 1, ${NOW})`);
   const credited = await ctx.fetch('/account', { cookie });
   ctx.check('the account lists the credit with its expiry',
     credited.text.includes('Account credit') && credited.text.includes('$10.00') && credited.text.includes('Goodwill') && credited.text.includes('use by'));
-  const casualUrl = `/book/checkout?kind=casual&term=term-dev-13&session=ses-13-w6&child=${child.id}`;
-  const quoted = await ctx.fetch(`${casualUrl}&voucher=dev5`, { cookie });
+  const casualUrl = `/book/checkout?kind=casual&term=${casualTerm}&session=${casualTerm}-w3&child=${child.id}`;
+  const quoted = await ctx.fetch(`${casualUrl}&voucher=pf%20five`, { cookie });
   ctx.check('voucher first, then credit, shown line by line',
-    quoted.text.includes('Voucher DEV5') && quoted.text.includes('−$5.00') && quoted.text.includes('Account credit applied')
+    quoted.text.includes('Voucher PFFIVE') && quoted.text.includes('−$5.00') && quoted.text.includes('Account credit applied')
       && quoted.text.includes('−$10.00') && quoted.text.includes('$15.00 AUD') && quoted.text.includes('used automatically'));
   const expired = await ctx.fetch(`${casualUrl}&voucher=oldie`, { cookie });
   ctx.check('an expired voucher is explained and not applied', expired.text.includes('That voucher has expired') && expired.text.includes('$20.00 AUD'));
 
   const paid = await ctx.fetch('/book/checkout', {
     method: 'POST', cookie,
-    body: { csrf, kind: 'casual', term: 'term-dev-13', session: 'ses-13-w6', child: child.id, voucher: 'DEV5', photo_consent: 'no', medical: '', waiver: 'accepted' },
+    body: { csrf, kind: 'casual', term: casualTerm, session: `${casualTerm}-w3`, child: child.id, voucher: 'PFFIVE', photo_consent: 'no', medical: '', waiver: 'accepted' },
   });
   const casual = bookingRef(paid.location);
   await ctx.fetch('/dev/mock-checkout', { method: 'POST', cookie, body: { csrf, booking: casual.id, ref: casual.ref, outcome: 'pay' } });
@@ -140,12 +143,13 @@ export async function run(ctx) {
   ctx.check('the credit is spent', ctx.sql(`SELECT remaining_cents FROM credits WHERE id = 'e2e-pf-credit'`)[0].remaining_cents === 0);
   const casualConfirm = await ctx.fetch(`/book/confirm?booking=${casual.id}`, { cookie });
   ctx.check('the confirmation shows the voucher and credit used',
-    casualConfirm.text.includes('Paid: $15.00 AUD') && casualConfirm.text.includes('Voucher DEV5: −$5.00') && casualConfirm.text.includes('Account credit: −$10.00'));
+    casualConfirm.text.includes('Paid: $15.00 AUD') && casualConfirm.text.includes('Voucher PFFIVE: −$5.00') && casualConfirm.text.includes('Account credit: −$10.00'));
+  ctx.check('the voucher use is counted', ctx.sql(`SELECT uses FROM vouchers WHERE code = 'PFFIVE'`)[0].uses === 1);
 
   ctx.section('Requests that cannot go ahead');
   const twoTrials = await ctx.fetch(`/book/checkout?kind=trial&term=${termId}&session=${termId}-w2&session=${termId}-w3&child=${child.id}`, { cookie });
   ctx.check('a trial of two classes is explained', twoTrials.status === 400 && twoTrials.text.includes('A trial is one class'));
-  const none = await ctx.fetch('/book/checkout?kind=casual&term=term-dev-13', { cookie });
+  const none = await ctx.fetch(`/book/checkout?kind=casual&term=${casualTerm}`, { cookie });
   ctx.check('a casual booking with no class ticked is explained', none.status === 400 && none.text.includes('Choose a class'));
   const unknown = await ctx.fetch('/book/checkout?kind=term&term=no-such-term', { cookie });
   ctx.check('an unknown term is a friendly 404', unknown.status === 404 && unknown.text.includes('find that class'));
@@ -153,20 +157,21 @@ export async function run(ctx) {
   ctx.check('booking the same term twice says it is already booked', done.status === 409 && done.text.includes('Already booked'));
 
   ctx.section('An unfinished checkout is cancelled and restarted');
+  const session = `${casualTerm}-w2`;
   const firstTry = await ctx.fetch('/book/checkout', {
     method: 'POST', cookie,
-    body: { csrf, kind: 'casual', term: 'term-dev-13', session: 'ses-13-w5', child: child.id, photo_consent: 'no', medical: '', waiver: 'accepted' },
+    body: { csrf, kind: 'casual', term: casualTerm, session, child: child.id, photo_consent: 'no', medical: '', waiver: 'accepted' },
   });
   const abandoned = bookingRef(firstTry.location);
-  const retry = await ctx.fetch(`/book/checkout?kind=casual&term=term-dev-13&session=ses-13-w5&child=${child.id}`, { cookie });
+  const retry = await ctx.fetch(`/book/checkout?kind=casual&term=${casualTerm}&session=${session}&child=${child.id}`, { cookie });
   ctx.check('coming back explains the unfinished booking and offers to start again',
     retry.status === 409 && retry.text.includes('already started this booking') && retry.text.includes('action="/book/checkout/release"'));
   const release = await ctx.fetch('/book/checkout/release', {
     method: 'POST', cookie,
-    body: { csrf, booking: abandoned.id, kind: 'casual', term: 'term-dev-13', session: 'ses-13-w5', child: child.id },
+    body: { csrf, booking: abandoned.id, kind: 'casual', term: casualTerm, session, child: child.id },
   });
   ctx.check('starting again returns to the same checkout',
-    release.status === 303 && release.location === `/book/checkout?kind=casual&term=term-dev-13&session=ses-13-w5&child=${child.id}`, release.location);
+    release.status === 303 && release.location === `/book/checkout?kind=casual&term=${casualTerm}&session=${session}&child=${child.id}`, release.location);
   ctx.check('the unfinished booking is released', ctx.sql(`SELECT status FROM bookings WHERE id = '${abandoned.id}'`)[0].status === 'expired');
   const stale = await ctx.fetch('/dev/mock-checkout', { method: 'POST', cookie, body: { csrf, booking: abandoned.id, ref: abandoned.ref, outcome: 'pay' } });
   ctx.check('its payment page can no longer take a payment', stale.status === 409);
@@ -175,5 +180,5 @@ export async function run(ctx) {
   const noCsrf = await ctx.fetch('/book/checkout/release', { method: 'POST', cookie, body: { csrf: 'nope', booking: abandoned.id } });
   ctx.check('starting again requires the CSRF token', noCsrf.status === 403);
 
-  ctx.sqlWrite(`UPDATE terms SET status = 'closed' WHERE id = '${termId}'`);
+  ctx.sqlWrite(`UPDATE terms SET status = 'closed' WHERE id IN ('${termId}', '${casualTerm}')`);
 }
