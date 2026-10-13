@@ -24,7 +24,7 @@ import {
 } from '../lib/validate.js';
 import {
   effectiveStatus, formatAud, confirmBooking, cancelBooking, getBooking, KIND_LABELS, PAYMENT_STATUS_LABELS,
-  NEEDS_ATTENTION_LABELS, BOOKING_KINDS,
+  NEEDS_ATTENTION_LABELS, BOOKING_KINDS, forgetPlanChoiceStatement,
 } from '../lib/domain.js';
 import { recordPayment } from '../lib/ledger.js';
 import { getPaymentsDriver } from '../lib/payments-driver.js';
@@ -409,13 +409,20 @@ export async function handleAdminRecordPayment(req, env, params) {
     ok = 'payment-recorded';
   } else {
     // Pending: stop a live Stripe checkout so the family cannot pay twice.
+    let checkoutClosed = !booking.payment_ref;
     if (booking.status === 'pending' && booking.payment_ref) {
       try {
         await getPaymentsDriver(env).expireCheckout(booking.payment_ref);
+        checkoutClosed = true;
       } catch (err) {
         logError('checkout_expire_failed', err, { booking_id: booking.id.slice(0, 8) });
       }
     }
+    // Paid by hand, not by instalments: an instalment plan chosen for that
+    // checkout never started, so it must not shape the payment status. (If
+    // the checkout could not be closed it may have just completed — then its
+    // plan is real and is kept.)
+    if (checkoutClosed) await forgetPlanChoiceStatement(env, booking.id, booking.payment_ref).run();
     const result = await confirmBooking(env, booking.id, { provider: 'external', payment });
     if (result.ok) {
       ok = 'payment-confirmed';

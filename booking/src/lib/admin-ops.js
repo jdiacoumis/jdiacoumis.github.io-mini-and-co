@@ -27,8 +27,8 @@ import { logEvent } from './log.js';
 import { sydneyToUtc, sydneyFields, formatSydney } from './time.js';
 import {
   holdsSeatSql, heldSeatsSql, bookingLiveSql, loadTerm, listTermSessions, prepareBooking,
-  createPendingBooking, confirmBooking, formatAud, PENDING_BOOKING_EXPIRY_SECS, KIND_LABELS,
-  NEEDS_ATTENTION_LABELS,
+  createPendingBooking, confirmBooking, formatAud, CHECKOUT_HOLD_MAX_SECS, KIND_LABELS,
+  NEEDS_ATTENTION_LABELS, isCheckoutHold, flagStatement,
 } from './domain.js';
 import { issueCreditStatement, creditBalance } from './ledger.js';
 import { planExpectedCents, proRata } from './pricing.js';
@@ -209,12 +209,9 @@ export function perWeekCreditCents({ amountCents = 0, creditCents = 0, weeks }) 
   return Math.floor(Math.max(0, (amountCents || 0) + (creditCents || 0)) / weeks);
 }
 
-// A checkout hold (35 minutes) as opposed to a pay-later hold (days) —
-// mirrors lib/domain.js isCheckoutHold.
-export function isCheckoutHold(booking) {
-  const span = Date.parse(booking.expires_at) - Date.parse(booking.created_at);
-  return Number.isFinite(span) && span <= (PENDING_BOOKING_EXPIRY_SECS + 300) * 1000;
-}
+// A checkout hold (35 minutes) as opposed to a pay-later hold (days): the
+// rule lives in lib/domain.js (re-exported here for the admin pages).
+export { isCheckoutHold };
 
 // Money still to collect. `received_cents` is the ledger total without
 // refunds (falls back to paid_cents); account credit joins the ledger only at
@@ -916,19 +913,29 @@ export async function saveBookingNotes(env, bookingId, notes) {
   return result.meta.changes > 0;
 }
 
+// Clear the booking's flag — only while it is one of `flags` — and append a
+// note line, in one batch: the note is written only when the flag clears
+// (both statements test the same flag, and a batch is atomic).
+async function clearFlagWithNote(env, bookingId, flags, line) {
+  const current = [...new Set(flags)];
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE bookings SET ${appendNoteSql('admin_notes')}
+       WHERE id = ?1 AND needs_attention IN (${current.map((_, i) => `?${i + 3}`).join(', ')})`,
+    ).bind(bookingId, String(line).slice(0, 600), ...current),
+    flagStatement(env, bookingId, null, { onlyIf: current }),
+  ]);
+  return results[1].meta.changes > 0;
+}
+
 // "Resolve" on Needs attention (D6): clear the flag and keep the owner's
-// note on the booking. (lib/domain.js flagBooking rejects a null flag, so the
-// clearing lives here.)
+// note on the booking.
 export async function resolveAttention(env, bookingId, { note = '', by = null, now = nowIso() } = {}) {
   const booking = await env.DB.prepare(`SELECT needs_attention FROM bookings WHERE id = ?1`).bind(bookingId).first();
   if (!booking || !booking.needs_attention) return false;
   const label = NEEDS_ATTENTION_LABELS[booking.needs_attention] || booking.needs_attention;
-  const line = `${formatSydney(now, 'date')}: resolved "${label}"${note ? ` — ${note}` : ''}`.slice(0, 600);
-  const result = await env.DB.prepare(
-    `UPDATE bookings SET needs_attention = NULL, ${appendNoteSql('admin_notes')}
-     WHERE id = ?1 AND needs_attention = ?3`,
-  ).bind(bookingId, line, booking.needs_attention).run();
-  const changed = result.meta.changes > 0;
+  const line = `${formatSydney(now, 'date')}: resolved "${label}"${note ? ` — ${note}` : ''}`;
+  const changed = await clearFlagWithNote(env, bookingId, [booking.needs_attention], line);
   if (changed) logEvent('attention_resolved', { booking_id: bookingId.slice(0, 8), by: by ? String(by).slice(0, 8) : null });
   return changed;
 }
@@ -938,11 +945,7 @@ export async function resolveAttention(env, bookingId, { note = '', by = null, n
 export async function clearFlagIf(env, bookingId, flags, note) {
   const allowed = flags.filter((f) => Object.hasOwn(NEEDS_ATTENTION_LABELS, f));
   if (!allowed.length) return false;
-  const result = await env.DB.prepare(
-    `UPDATE bookings SET needs_attention = NULL, ${appendNoteSql('admin_notes')}
-     WHERE id = ?1 AND needs_attention IN (${allowed.map((f) => `'${f}'`).join(', ')})`,
-  ).bind(bookingId, String(note).slice(0, 600)).run();
-  return result.meta.changes > 0;
+  return clearFlagWithNote(env, bookingId, allowed, note);
 }
 
 // A note line appended to a booking (e.g. "cancelled from Needs attention").
@@ -997,7 +1000,7 @@ export async function dashboardCounts(env, now = nowIso()) {
           AND (julianday(expires_at) - julianday(created_at)) * 86400 > ?3) AS pay_later,
        (SELECT COUNT(*) FROM terms WHERE status = 'open') AS open_terms,
        (SELECT COUNT(*) FROM waitlist WHERE status = 'waiting') AS waiting`,
-  ).bind(staleBefore, now, PENDING_BOOKING_EXPIRY_SECS + 300).first();
+  ).bind(staleBefore, now, CHECKOUT_HOLD_MAX_SECS).first();
 }
 
 // --- Customers -----------------------------------------------------------------

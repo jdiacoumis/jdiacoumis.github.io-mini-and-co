@@ -13,7 +13,7 @@ import {
   canBookTerm, returningPriceApplies, proRata, planFor, instalmentSchedule,
 } from './pricing.js';
 import {
-  PENDING_BOOKING_EXPIRY_SECS, bookingLiveSql, childHasTrial, effectiveStatus, formatAud,
+  bookingLiveSql, childHasTrial, effectiveStatus, formatAud, isCheckoutHold,
 } from './domain.js';
 import { formatSydney } from './time.js';
 
@@ -123,11 +123,8 @@ export function describeDates(startsIso) {
 
 // A checkout hold lasts PENDING_BOOKING_EXPIRY_SECS while a parent pays;
 // pay-later holds (admin bookings, waitlist offers, auto-enrol) last days.
-// Same rule as domain.js's private isCheckoutHold().
-export function isCheckoutHold(booking) {
-  const span = Date.parse(booking.expires_at) - Date.parse(booking.created_at);
-  return Number.isFinite(span) && span <= (PENDING_BOOKING_EXPIRY_SECS + 300) * 1000;
-}
+// The rule itself lives in lib/domain.js (re-exported for the parent pages).
+export { isCheckoutHold };
 
 // A live pending booking the family pays for from their account (Pay now).
 export function isPayLaterHold(booking, now) {

@@ -38,6 +38,21 @@ import { getPaymentsDriver } from './payments-driver.js';
 // expires after 31 minutes — see payments-driver.js).
 export const PENDING_BOOKING_EXPIRY_SECS = 35 * 60;
 
+// A pending booking held for at most this long is a CHECKOUT hold (a parent
+// paying right now); anything longer is a PAY-LATER hold (an owner booking, a
+// waitlist offer, an auto-enrolment) that the family pays from their account
+// with Pay now. Pay-later holds last hours or days, and createPendingBooking
+// refuses one that would not clear this threshold.
+export const CHECKOUT_HOLD_MAX_SECS = PENDING_BOOKING_EXPIRY_SECS + 5 * 60;
+
+// THE checkout-hold rule: every page, list and action that tells the two
+// kinds of hold apart uses this one function.
+//   booking: a bookings row (created_at, expires_at)
+export function isCheckoutHold(booking) {
+  const span = Date.parse(booking.expires_at) - Date.parse(booking.created_at);
+  return Number.isFinite(span) && span <= CHECKOUT_HOLD_MAX_SECS * 1000;
+}
+
 export const BOOKING_KINDS = ['term', 'casual', 'trial', 'complimentary'];
 
 export const KIND_LABELS = {
@@ -105,8 +120,14 @@ function childInSessionSql(sessionIdExpr, childParam, nowParam, excludeBookingPa
 // Does this child hold a live trial anywhere? ONE trial per child across all
 // classes (owner decision, 2026-10-13 interview). `classParam` stays in the
 // signature for call-site stability but no longer narrows the check.
+// A trial the OWNER called off does not count, so the child may book another:
+// the trial booking must be live AND still hold a 'booked' row in a scheduled
+// session (a cancelled week or a cancelled class frees it; a trial moved to
+// another class has a 'booked' row there, so it still counts).
 function trialHeldSql(childParam, classParam, nowParam, excludeBookingParam = null) {
   return `EXISTS (SELECT 1 FROM bookings tb
+                  JOIN booking_sessions tbs ON tbs.booking_id = tb.id AND tbs.status = 'booked'
+                  JOIN class_sessions tcs ON tcs.id = tbs.session_id AND tcs.status = 'scheduled'
                   WHERE tb.child_id = ${childParam} AND tb.kind = 'trial'
                     ${excludeBookingParam ? `AND tb.id != ${excludeBookingParam}` : ''}
                     AND ${bookingLiveSql('tb', nowParam)})`;
@@ -403,8 +424,9 @@ export async function prepareBooking(env, {
 //
 // `quote` comes from prepareBooking (listCents, discountCents, voucherCode,
 // creditCents, allocations, amountCents, plan). `expiresAt` defaults to now +
-// 35 minutes (pay-later holds pass their own). `paymentMethod` defaults from
-// the quote: plan | none (nothing to pay) | full.
+// 35 minutes (a checkout hold); pay-later holds pass their own, which must
+// outlast CHECKOUT_HOLD_MAX_SECS (isCheckoutHold tells the two apart).
+// `paymentMethod` defaults from the quote: plan | none (nothing to pay) | full.
 //
 // Returns { id, expiresAt, amountCents, sessions } or { error, sessions? } with
 // error ∈ no_sessions | unavailable | already_booked | trial_one_session |
@@ -423,6 +445,11 @@ export async function createPendingBooking(env, {
   if (![listCents, discountCents, creditCents, amountCents].every((v) => Number.isInteger(v) && v >= 0)
     || listCents - discountCents - creditCents !== amountCents) {
     throw new Error('createPendingBooking: inconsistent quote');
+  }
+  if (expiresAt && Date.parse(expiresAt) - Date.parse(now) <= CHECKOUT_HOLD_MAX_SECS * 1000) {
+    // It would be mistaken for a checkout hold: no Pay now, released by
+    // "Didn't finish paying?" and Check with Stripe like an abandoned checkout.
+    throw new Error('createPendingBooking: a pay-later hold must outlast the checkout hold');
   }
 
   const sessions = await loadSessionsForBooking(env, unique, now);
@@ -527,18 +554,28 @@ export async function attachPaymentRef(env, bookingId, provider, paymentRef) {
 
 // --- Confirming --------------------------------------------------------------
 
-export function flagStatement(env, bookingId, flag, { overwrite = true } = {}) {
-  if (!Object.hasOwn(NEEDS_ATTENTION_LABELS, flag)) throw new Error(`Unknown attention flag: ${flag}`);
-  return env.DB.prepare(
-    overwrite
-      ? `UPDATE bookings SET needs_attention = ?2 WHERE id = ?1`
-      : `UPDATE bookings SET needs_attention = COALESCE(needs_attention, ?2) WHERE id = ?1`,
-  ).bind(bookingId, flag);
+// Set (or, with flag = null, clear) a booking's needs_attention flag.
+//   overwrite: false keeps a flag that is already set (setting only)
+//   onlyIf:    [flags] — change the booking only while it carries one of
+//              these flags (e.g. clear "paid_no_seat" but never a newer flag
+//              that replaced it); values are bound, never inlined
+export function flagStatement(env, bookingId, flag, { overwrite = true, onlyIf = null } = {}) {
+  if (flag !== null && !Object.hasOwn(NEEDS_ATTENTION_LABELS, flag)) throw new Error(`Unknown attention flag: ${flag}`);
+  const current = onlyIf ? [...new Set(onlyIf)] : [];
+  if (onlyIf && !current.length) throw new Error('flagStatement: onlyIf needs at least one flag');
+  const guard = current.length ? ` AND needs_attention IN (${current.map((_, i) => `?${i + 3}`).join(', ')})` : '';
+  // ?2 is always used (D1 rejects bindings the SQL does not reference).
+  const set = flag !== null && !overwrite ? 'COALESCE(needs_attention, ?2)' : '?2';
+  return env.DB.prepare(`UPDATE bookings SET needs_attention = ${set} WHERE id = ?1${guard}`)
+    .bind(bookingId, flag, ...current);
 }
 
+// Set or clear (flag = null) a flag now. Returns true when the booking changed.
 export async function flagBooking(env, bookingId, flag, options = {}) {
-  await flagStatement(env, bookingId, flag, options).run();
-  logEvent('booking_flagged', { booking_id: bookingId.slice(0, 8), flag });
+  const result = await flagStatement(env, bookingId, flag, options).run();
+  const changed = result.meta.changes > 0;
+  if (changed) logEvent(flag === null ? 'booking_flag_cleared' : 'booking_flagged', { booking_id: bookingId.slice(0, 8), flag });
+  return changed;
 }
 
 function waitlistBookedStatement(env, bookingId, now) {
@@ -734,16 +771,26 @@ export async function expireBooking(env, bookingId) {
   return changed;
 }
 
-// Pay-later holds (admin bookings, waitlist offers, auto-enrol) last days;
-// a checkout hold lasts PENDING_BOOKING_EXPIRY_SECS.
-function isCheckoutHold(booking) {
-  const span = Date.parse(booking.expires_at) - Date.parse(booking.created_at);
-  return Number.isFinite(span) && span <= (PENDING_BOOKING_EXPIRY_SECS + 300) * 1000;
+// Forget an instalment plan that was chosen for a checkout which is now over
+// without the plan starting (no subscription): the booking goes back to "pay
+// in full", so a later offline payment or a fresh Pay now is never treated as
+// a plan (recomputeBooking would otherwise report plan_* statuses). Only
+// while the booking is still on `paymentRef` (null once detached) — a newer
+// checkout attached meanwhile keeps its own choice — and never once confirmed.
+export function forgetPlanChoiceStatement(env, bookingId, paymentRef) {
+  return env.DB.prepare(
+    `UPDATE bookings SET payment_method = 'full', plan_instalments = NULL, plan_instalment_cents = NULL,
+            plan_interval = NULL, plan_next_charge_at = NULL
+     WHERE id = ?1 AND status IN ('pending', 'expired') AND payment_ref IS ?2
+       AND payment_method = 'plan' AND stripe_subscription_id IS NULL`,
+  ).bind(bookingId, paymentRef ?? null);
 }
 
-// The parent left (or Stripe expired) a hosted checkout. A checkout hold is
-// released; a longer pay-later hold keeps its seats and just forgets the
-// abandoned checkout. Ignored when a different checkout is now attached.
+// The parent left (or Stripe expired) a hosted checkout — the caller knows it
+// can no longer take a payment. A checkout hold is released; a longer
+// pay-later hold keeps its seats and just forgets the abandoned checkout.
+// Either way an instalment plan chosen for that checkout is forgotten.
+// Ignored when a different checkout is now attached.
 // Returns 'expired' | 'detached' | 'noop'.
 export async function abandonCheckout(env, bookingId, checkoutRef = null) {
   const booking = await env.DB.prepare(
@@ -752,11 +799,18 @@ export async function abandonCheckout(env, bookingId, checkoutRef = null) {
   if (!booking || booking.status !== 'pending') return 'noop';
   if (checkoutRef && booking.payment_ref && booking.payment_ref !== checkoutRef) return 'noop';
   if (isCheckoutHold(booking)) {
-    return (await expireBooking(env, bookingId)) ? 'expired' : 'noop';
+    const statements = expiryStatements(env, bookingId);
+    const results = await env.DB.batch([...statements, forgetPlanChoiceStatement(env, bookingId, booking.payment_ref)]);
+    const changed = results[statements.length - 1].meta.changes > 0;
+    if (changed) logEvent('booking_expired', { booking_id: bookingId.slice(0, 8) });
+    return changed ? 'expired' : 'noop';
   }
-  await env.DB.prepare(
-    `UPDATE bookings SET payment_ref = NULL WHERE id = ?1 AND status = 'pending' AND payment_ref IS ?2`,
-  ).bind(bookingId, booking.payment_ref).run();
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE bookings SET payment_ref = NULL WHERE id = ?1 AND status = 'pending' AND payment_ref IS ?2`,
+    ).bind(bookingId, booking.payment_ref),
+    forgetPlanChoiceStatement(env, bookingId, null),
+  ]);
   return 'detached';
 }
 

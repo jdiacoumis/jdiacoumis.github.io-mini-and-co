@@ -867,18 +867,11 @@ export async function backOutOfCheckout(env, booking) {
   const closed = await closeProviderCheckout(env, booking);
   if (closed === 'complete') return 'paid';
   if (closed === 'unknown') return 'held';
+  // A held place keeps its seats (detached); either way an instalment plan
+  // chosen for the abandoned checkout is forgotten by abandonCheckout (Pay
+  // now asks again), so an offline payment recorded later is never a plan.
   const outcome = await abandonCheckout(env, booking.id, booking.payment_ref || null);
   logEvent('booking_backed_out_of_checkout', { booking_id: booking.id.slice(0, 8), outcome });
-  if (outcome === 'detached') {
-    // A held place keeps its seats; an instalment plan chosen for the
-    // abandoned checkout is forgotten (Pay now asks again), so an offline
-    // payment recorded later is never treated as a plan.
-    await env.DB.prepare(
-      `UPDATE bookings SET payment_method = 'full', plan_instalments = NULL, plan_instalment_cents = NULL, plan_interval = NULL
-       WHERE id = ?1 AND status = 'pending' AND payment_ref IS NULL AND payment_method = 'plan'
-         AND stripe_subscription_id IS NULL`,
-    ).bind(booking.id).run();
-  }
   return outcome === 'detached' ? 'kept' : 'released';
 }
 
