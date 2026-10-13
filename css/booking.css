@@ -1,0 +1,1755 @@
+/* Booking pages stylesheet — server-rendered pages under /book, /account,
+   /auth and /admin. Extends css/styles.css and reuses its brand tokens. */
+
+.booking-body {
+  display: flex;
+  min-height: 100vh;
+  flex-direction: column;
+}
+
+/* --- Header / footer ---
+   The booking layout reuses the marketing site's header/footer markup and
+   classes (styled by styles.css). Only the sign-out control is new: a POST
+   form whose button must read exactly like a nav link. */
+
+.nav-signout-form {
+  display: inline;
+  margin: 0;
+}
+
+button.nav-signout {
+  background: none;
+  border: none;
+  cursor: pointer;
+  width: auto;
+}
+
+button.nav-signout:hover {
+  background: none;
+}
+
+.booking-main {
+  flex: 1;
+  width: 100%;
+  max-width: var(--max-width-narrow);
+  margin: 0 auto;
+  padding: var(--space-lg) var(--space-md) var(--space-2xl);
+}
+
+/* --- Typography --- */
+
+.booking-main h1 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(2rem, 1.6rem + 1.5vw, 2.75rem);
+  line-height: 1.15;
+  margin: 0 0 var(--space-sm);
+}
+
+.booking-main h2 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 1.4rem;
+  margin: var(--space-lg) 0 var(--space-xs);
+}
+
+.booking-main .lede {
+  color: var(--colour-text-soft);
+  max-width: var(--max-width-prose);
+}
+
+/* --- Forms --- */
+
+.booking-form {
+  max-width: var(--max-width-narrow);
+  margin: var(--space-md) 0;
+}
+
+.form-group {
+  margin-bottom: var(--space-md);
+}
+
+.form-group label,
+.form-group legend {
+  display: block;
+  margin-bottom: var(--space-2xs);
+  font-weight: 400;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="tel"],
+input[type="date"],
+input[type="time"],
+input[type="number"],
+textarea,
+select {
+  width: 100%;
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--colour-line);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-body);
+  font-size: 1rem;
+  background-color: #fff;
+  color: var(--colour-text);
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--colour-accent-sage);
+  box-shadow: 0 0 0 3px rgba(174, 189, 161, 0.18);
+}
+
+.consent-group {
+  border: 1px solid var(--colour-line);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+}
+
+.consent-group legend {
+  padding: 0 var(--space-2xs);
+  font-weight: 400;
+}
+
+.consent-group label {
+  display: block;
+  margin: var(--space-2xs) 0;
+  font-weight: 300;
+}
+
+.consent-group input,
+.form-group input[type="checkbox"],
+.form-group input[type="radio"] {
+  width: auto;
+  margin-right: var(--space-2xs);
+}
+
+button,
+.button-link {
+  display: inline-block;
+  padding: var(--space-xs) var(--space-md);
+  background-color: var(--colour-text);
+  color: var(--colour-bg);
+  border: none;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 1rem;
+  font-weight: 400;
+  text-decoration: none;
+  transition: background-color var(--transition), transform var(--transition);
+}
+
+button:hover,
+.button-link:hover {
+  background-color: var(--colour-text-soft);
+}
+
+button:active {
+  transform: scale(0.98);
+}
+
+.button-secondary {
+  background-color: transparent;
+  color: var(--colour-text);
+  border: 1px solid var(--colour-line);
+}
+
+.button-secondary:hover {
+  background-color: var(--colour-bg-warm);
+}
+
+.button-danger {
+  background-color: #a04545;
+}
+
+.button-danger:hover {
+  background-color: #b65d5d;
+}
+
+.form-error {
+  background-color: var(--colour-bg-blush);
+  border: 1px solid var(--colour-accent-blush);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+  color: var(--colour-text);
+}
+
+/* --- Page header with action --- */
+
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.page-head h1 {
+  margin: 0;
+}
+
+.account-signed-in {
+  color: var(--colour-text-muted);
+  font-size: 0.9rem;
+  margin-top: var(--space-2xs);
+}
+
+/* --- Class list --- */
+
+.class-card {
+  background-color: #fff;
+  border: 1px solid var(--colour-line-soft);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+  padding: var(--space-md) var(--space-lg);
+  margin: var(--space-md) 0;
+}
+
+.class-card h2 {
+  margin-top: 0;
+}
+
+.class-meta {
+  color: var(--colour-text-muted);
+  font-size: 0.9rem;
+  margin-top: calc(-1 * var(--space-2xs));
+}
+
+.trial-line {
+  background-color: var(--colour-bg-sage);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.term-group {
+  border-top: 1px solid var(--colour-line-soft);
+  margin-top: var(--space-md);
+  padding-top: var(--space-xs);
+}
+
+.term-group h3 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 1.25rem;
+  margin: var(--space-xs) 0;
+}
+
+.term-range {
+  color: var(--colour-text-muted);
+  font-family: var(--font-body);
+  font-weight: 300;
+  font-size: 0.9rem;
+}
+
+.slot-group {
+  margin: var(--space-sm) 0;
+}
+
+.slot-group h4 {
+  margin: 0 0 var(--space-2xs);
+  font-weight: 500;
+}
+
+.slot-sessions {
+  margin-top: var(--space-xs);
+}
+
+.slot-sessions summary {
+  cursor: pointer;
+  color: var(--colour-text-soft);
+  font-size: 0.9rem;
+}
+
+.term-list {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-xs) 0;
+}
+
+.term-list li {
+  padding: var(--space-2xs) 0;
+  border-top: 1px solid var(--colour-line-soft);
+}
+
+.session-list {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-sm) 0 0;
+}
+
+.session-option {
+  border-top: 1px solid var(--colour-line-soft);
+  padding: var(--space-xs) 0;
+}
+
+.session-option label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  cursor: pointer;
+}
+
+.session-option-full {
+  color: var(--colour-text-muted);
+}
+
+.session-when {
+  font-weight: 400;
+  min-width: 16rem;
+}
+
+.session-meta {
+  color: var(--colour-text-soft);
+}
+
+.session-spots {
+  margin-left: auto;
+  color: var(--colour-accent-sage);
+  font-size: 0.9rem;
+}
+
+.session-full {
+  margin-left: auto;
+  color: var(--colour-text-muted);
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* --- Checkout --- */
+
+.checkout-sessions {
+  list-style: none;
+  padding: 0;
+}
+
+.checkout-session {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  border-bottom: 1px solid var(--colour-line-soft);
+  padding: var(--space-2xs) 0;
+}
+
+.checkout-total {
+  text-align: right;
+  font-size: 1.1rem;
+}
+
+.waiver-text {
+  background-color: var(--colour-bg-warm);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  font-size: 0.9rem;
+  color: var(--colour-text-soft);
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
+.waiver-text h3 {
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--colour-text);
+  margin: var(--space-sm) 0 var(--space-2xs);
+}
+
+.waiver-version {
+  font-size: 0.8rem;
+  color: var(--colour-text-muted);
+}
+
+.child-chooser {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  max-width: 24rem;
+}
+
+/* --- Confirmation --- */
+
+.confirm-panel {
+  background-color: #fff;
+  border: 1px solid var(--colour-line-soft);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+  padding: var(--space-lg);
+}
+
+.confirm-paid {
+  border-color: var(--colour-accent-sage);
+}
+
+.confirm-sessions {
+  padding-left: 1.2rem;
+}
+
+.session-venue {
+  color: var(--colour-text-muted);
+}
+
+/* --- Tables (account, admin) --- */
+
+.booking-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--space-sm) 0;
+  background-color: #fff;
+  border: 1px solid var(--colour-line-soft);
+  border-radius: var(--radius-sm);
+}
+
+.booking-table th,
+.booking-table td {
+  text-align: left;
+  padding: var(--space-xs) var(--space-sm);
+  border-bottom: 1px solid var(--colour-line-soft);
+  font-size: 0.95rem;
+}
+
+.booking-table th {
+  font-weight: 500;
+  color: var(--colour-text-soft);
+}
+
+.table-actions a {
+  margin-right: var(--space-xs);
+}
+
+.status {
+  display: inline-block;
+  padding: 0.1rem 0.6rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.85rem;
+}
+
+.status-confirmed { background-color: var(--colour-bg-sage); }
+.status-pending { background-color: var(--colour-bg-warm); }
+.status-cancelled,
+.status-expired { background-color: var(--colour-line-soft); color: var(--colour-text-muted); }
+
+/* --- Admin --- */
+
+.admin-nav {
+  display: flex;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--colour-line);
+  padding-bottom: var(--space-xs);
+  margin-bottom: var(--space-md);
+}
+
+.admin-nav a {
+  color: var(--colour-text-soft);
+  text-decoration: none;
+  font-size: 0.95rem;
+}
+
+.admin-nav a:hover {
+  color: var(--colour-text);
+}
+
+.form-notice {
+  background-color: var(--colour-bg-sage);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.inline-form {
+  display: inline-block;
+  margin: var(--space-2xs) 0;
+}
+
+.button-small {
+  padding: 0.2rem 0.8rem;
+  font-size: 0.85rem;
+}
+
+.filter-links a {
+  margin-right: var(--space-2xs);
+}
+
+.filter-active {
+  font-weight: 600;
+}
+
+.muted {
+  color: var(--colour-text-muted);
+  font-size: 0.85rem;
+}
+
+.row-cancelled {
+  opacity: 0.55;
+}
+
+.roster-medical {
+  max-width: 18rem;
+  white-space: pre-line;
+}
+
+.mail-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.85rem;
+  background-color: var(--colour-bg);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm);
+}
+
+/* --- Misc --- */
+
+.account-section {
+  margin: var(--space-md) 0;
+}
+
+.account-section h2 {
+  margin: var(--space-sm) 0 var(--space-2xs);
+}
+
+.account-children {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-2xs) 0;
+}
+
+.account-children li {
+  padding: var(--space-2xs) 0;
+}
+
+.notice-list {
+  background-color: var(--colour-bg-blush);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md) var(--space-sm) var(--space-lg);
+}
+
+.error-container {
+  text-align: center;
+  padding: var(--space-2xl) var(--space-md);
+}
+
+.error-container h1 {
+  font-size: 4rem;
+  font-weight: 300;
+  margin: 0 0 var(--space-sm);
+  color: var(--colour-accent-blush);
+}
+
+.error-container h2 {
+  font-size: 1.5rem;
+  font-weight: 400;
+  margin: 0 0 var(--space-md);
+}
+
+/* ==========================================================================
+   Core (booking-terms-plans-ops, Phase 1): term cards, checkout price
+   breakdown, plan choice, voucher field, attention flags. Phase 2 areas
+   append their own marked sections below.
+   ========================================================================== */
+
+.term-price {
+  font-weight: 500;
+  margin: var(--space-2xs) 0;
+}
+
+.term-returning,
+.term-plan {
+  display: inline-block;
+  margin-left: var(--space-2xs);
+  padding: 0.05rem 0.55rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.8rem;
+  font-weight: 400;
+  background-color: var(--colour-bg-sage);
+}
+
+.term-plan {
+  background-color: var(--colour-bg-warm);
+}
+
+.term-book {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.term-opens,
+.term-full {
+  background-color: var(--colour-bg-blush);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.casual-form {
+  margin: var(--space-xs) 0;
+}
+
+.checkout-summary {
+  background-color: #fff;
+  border: 1px solid var(--colour-line-soft);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
+.price-breakdown {
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--space-xs) 0;
+}
+
+.price-breakdown td {
+  padding: var(--space-2xs) 0;
+  border-bottom: 1px solid var(--colour-line-soft);
+}
+
+.price-breakdown td:last-child {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.price-total td {
+  font-weight: 600;
+  border-bottom: none;
+}
+
+.voucher-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+  margin: 0 0 var(--space-md);
+}
+
+.voucher-form input {
+  max-width: 12rem;
+}
+
+.voucher-form .form-error {
+  flex-basis: 100%;
+}
+
+.plan-options label {
+  display: block;
+  padding: var(--space-2xs) 0;
+  min-height: 44px;
+}
+
+.plan-schedule {
+  margin-top: var(--space-xs);
+}
+
+.account-credit {
+  background-color: var(--colour-bg-sage);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.row-attention {
+  background-color: var(--colour-bg-blush);
+}
+
+.attention-flag {
+  display: inline-block;
+  margin-top: var(--space-2xs);
+  padding: 0.05rem 0.5rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.8rem;
+  background-color: var(--colour-accent-blush);
+}
+
+.inline-details summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.record-payment-form label {
+  display: block;
+  font-size: 0.85rem;
+  margin: var(--space-2xs) 0;
+}
+
+/* ===========================================================================
+   Phase 2 sections. Each Phase 2 agent adds its rules ONLY inside its own
+   block below so the three worktrees merge cleanly. Keep the markers.
+   =========================================================================== */
+
+/* === 2A parent flow (routes/booking.js, account.js, waitlist.js) — start === */
+
+/* Parent pages wrap their body in .parent-flow. Every control is a
+   comfortable touch target (44 px), mobile first. */
+
+.parent-flow button,
+.parent-flow .button-link {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  line-height: 1.3;
+}
+
+.parent-flow button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.parent-flow summary {
+  padding: var(--space-xs) 0;
+  cursor: pointer;
+}
+
+.parent-flow .session-option label,
+.parent-flow .consent-group label {
+  min-height: 44px;
+  align-items: center;
+}
+
+.parent-flow .choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-xs);
+  min-height: 44px;
+  padding: var(--space-2xs) 0;
+  cursor: pointer;
+}
+
+.parent-flow .choice input {
+  width: auto;
+  flex-shrink: 0;
+  margin: 0.35rem 0 0;
+}
+
+.parent-flow .choice-disabled {
+  color: var(--colour-text-muted);
+  cursor: default;
+}
+
+.parent-flow .inline-form {
+  margin: var(--space-2xs) var(--space-xs) var(--space-2xs) 0;
+}
+
+/* styles.css pads every <section> like a marketing band; account sections
+   are plain blocks. */
+.parent-flow .account-section {
+  padding-block: 0;
+}
+
+.parent-flow .plan-options {
+  border: 1px solid var(--colour-line);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+}
+
+.parent-flow .plan-options legend {
+  padding: 0 var(--space-2xs);
+}
+
+.sessions-heading {
+  font-weight: 400;
+  margin: var(--space-xs) 0 0;
+}
+
+/* Alerts and notes */
+
+.pf-alert {
+  background-color: var(--colour-bg-blush);
+  border: 1px solid var(--colour-accent-blush);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+  margin: var(--space-sm) 0;
+}
+
+.pf-alert ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.pf-alert li + li {
+  margin-top: var(--space-2xs);
+}
+
+/* Class list */
+
+.term-notes {
+  list-style: none;
+  margin: var(--space-xs) 0;
+  padding: var(--space-xs) var(--space-sm);
+  background-color: var(--colour-bg-sage);
+  border-radius: var(--radius-sm);
+}
+
+.term-window,
+.term-early {
+  background-color: var(--colour-bg-warm);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.term-full p {
+  margin: var(--space-2xs) 0;
+}
+
+.trial-line p {
+  margin: var(--space-2xs) 0;
+}
+
+.trial-dates ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.trial-dates a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+.casual-total {
+  font-weight: 500;
+  min-height: 1.5em;
+  margin: var(--space-xs) 0;
+}
+
+.casual-total:empty {
+  margin: 0;
+}
+
+.one-off-group .session-list {
+  margin-top: 0;
+}
+
+/* Checkout and Pay now */
+
+.checkout-child {
+  font-size: 0.95rem;
+  margin: 0 0 var(--space-xs);
+}
+
+.child-unavailable {
+  display: inline-block;
+  padding: var(--space-xs) 0;
+  color: var(--colour-text-muted);
+}
+
+.child-choices {
+  border: 1px solid var(--colour-line);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+}
+
+.plan-dates {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-xs) 0;
+}
+
+.plan-dates li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: var(--space-2xs) 0;
+  border-bottom: 1px solid var(--colour-line-soft);
+}
+
+.plan-dates .plan-paid {
+  color: var(--colour-text-muted);
+}
+
+/* Account */
+
+.booking-cards {
+  display: grid;
+  gap: var(--space-sm);
+  margin: var(--space-sm) 0;
+}
+
+.booking-card {
+  background-color: #fff;
+  border: 1px solid var(--colour-line-soft);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+  padding: var(--space-sm) var(--space-md);
+}
+
+.booking-card-alert {
+  border-color: var(--colour-accent-blush);
+}
+
+.booking-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2xs) var(--space-xs);
+}
+
+.booking-card-head h3 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 1.25rem;
+  margin: 0;
+}
+
+.booking-card p {
+  margin: var(--space-2xs) 0;
+}
+
+.booking-card-meta {
+  color: var(--colour-text-soft);
+}
+
+.booking-card-when {
+  font-size: 0.95rem;
+}
+
+.pay-status {
+  padding-left: var(--space-xs);
+  border-left: 3px solid var(--colour-accent-sage);
+}
+
+.pay-status-due {
+  border-left-color: var(--colour-accent-blush);
+}
+
+.pay-status-alert {
+  border-left-color: #a04545;
+}
+
+.pay-status-muted {
+  border-left-color: var(--colour-line);
+  color: var(--colour-text-muted);
+}
+
+.booking-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs) var(--space-sm);
+  margin-top: var(--space-xs);
+}
+
+.booking-card-actions .inline-form {
+  margin: 0;
+}
+
+.booking-card-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+.earlier-bookings {
+  margin-top: var(--space-sm);
+}
+
+.update-card {
+  margin-top: var(--space-sm);
+}
+
+.credit-list,
+.waitlist-list {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-xs) 0;
+}
+
+.credit-list li {
+  padding: var(--space-2xs) 0;
+  border-bottom: 1px solid var(--colour-line-soft);
+}
+
+/* A family's own waitlist places (waitlist page, account); the owner's
+   waitlist page styles its entries under .waitlist-entries (2C). */
+.waitlist-list .waitlist-entry {
+  background-color: #fff;
+  border: 1px solid var(--colour-line-soft);
+  border-radius: var(--radius-md);
+  padding: var(--space-xs) var(--space-sm);
+  margin-bottom: var(--space-xs);
+}
+
+.waitlist-list .waitlist-entry p {
+  margin: var(--space-2xs) 0;
+}
+
+/* Small phones: less side padding, and each class date stacks its time,
+   price and places beside the checkbox instead of overflowing the card. */
+@media (max-width: 560px) {
+  .parent-flow .class-card,
+  .parent-flow .confirm-panel,
+  .parent-flow .checkout-summary {
+    padding: var(--space-sm);
+  }
+
+  .parent-flow .session-option label {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: var(--space-xs);
+    align-items: start;
+  }
+
+  .parent-flow .session-option input {
+    grid-row: 1 / span 3;
+    margin-top: 0.35rem;
+  }
+
+  .parent-flow .session-when,
+  .parent-flow .session-meta,
+  .parent-flow .session-spots,
+  .parent-flow .session-full {
+    grid-column: 2;
+    min-width: 0;
+    margin-left: 0;
+  }
+
+  .parent-flow .term-book .button-link,
+  .parent-flow .booking-form > button {
+    width: 100%;
+  }
+}
+
+@media (min-width: 720px) {
+  .booking-card {
+    padding: var(--space-md) var(--space-lg);
+  }
+}
+
+/* === 2A parent flow — end === */
+
+/* === 2B admin operations (routes/admin*.js) — start === */
+
+/* Wide admin pages (term grid, bookings, rosters) use the full site width;
+   anything wider scrolls sideways inside .table-scroll, never the page. */
+.booking-main:has(.admin-wide) {
+  max-width: var(--max-width);
+}
+
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: var(--space-sm) 0;
+}
+
+.table-scroll .booking-table {
+  margin: 0;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.breadcrumb {
+  font-size: 0.9rem;
+  color: var(--colour-text-muted);
+  margin: 0 0 var(--space-2xs);
+}
+
+.form-hint {
+  color: var(--colour-text-muted);
+  font-size: 0.85rem;
+  margin: var(--space-2xs) 0;
+}
+
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-md);
+}
+
+.form-row > .form-group {
+  flex: 1 1 12rem;
+}
+
+.inline-actions,
+.quick-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs) var(--space-sm);
+  margin: var(--space-sm) 0;
+}
+
+.inline-actions .inline-form {
+  margin: 0;
+}
+
+.confirm-box {
+  background-color: var(--colour-bg-blush);
+  border: 1px solid var(--colour-accent-blush);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  margin: var(--space-md) 0;
+}
+
+.check-list label {
+  display: block;
+  min-height: 44px;
+  padding: var(--space-2xs) 0;
+  font-weight: 300;
+}
+
+.check-list input {
+  width: auto;
+  margin-right: var(--space-2xs);
+}
+
+.plain-list {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-2xs) 0;
+}
+
+.nested-fields {
+  margin-left: var(--space-lg);
+}
+
+.filter-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-xs) var(--space-sm);
+  margin: var(--space-sm) 0;
+}
+
+.filter-form label {
+  font-size: 0.85rem;
+  color: var(--colour-text-soft);
+}
+
+.filter-form select,
+.filter-form input[type="search"] {
+  width: auto;
+  min-width: 9rem;
+  display: block;
+}
+
+.filter-form .filter-check input {
+  width: auto;
+}
+
+.inline-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-sm);
+}
+
+.inline-search .form-group {
+  flex: 1 1 16rem;
+  margin-bottom: 0;
+}
+
+.detail-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-2xs) var(--space-md);
+  background-color: #fff;
+  border: 1px solid var(--colour-line-soft);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+}
+
+.detail-list dt {
+  font-weight: 500;
+  color: var(--colour-text-soft);
+}
+
+.detail-list dd {
+  margin: 0;
+}
+
+/* Dashboard tiles */
+.stat-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--space-sm);
+  margin: var(--space-md) 0;
+}
+
+.stat-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  background-color: #fff;
+  border: 1px solid var(--colour-line-soft);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  color: var(--colour-text);
+  text-decoration: none;
+  box-shadow: var(--shadow-soft);
+}
+
+.stat-tile:hover {
+  border-color: var(--colour-accent-sage);
+}
+
+.stat-tile-alert {
+  background-color: var(--colour-bg-blush);
+  border-color: var(--colour-accent-blush);
+}
+
+.stat-number {
+  font-family: var(--font-display);
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.stat-label {
+  font-size: 0.9rem;
+  color: var(--colour-text-soft);
+}
+
+/* Term status badges */
+.term-status-open { background-color: var(--colour-bg-sage); }
+.term-status-draft { background-color: var(--colour-bg-warm); }
+.term-status-closed { background-color: var(--colour-line-soft); color: var(--colour-text-muted); }
+
+.add-week-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.add-week-form input[type="date"] {
+  width: auto;
+}
+
+/* The term grid: families × weeks, first column pinned while scrolling. */
+.term-grid th,
+.term-grid td {
+  white-space: nowrap;
+  text-align: center;
+}
+
+.term-grid .grid-family {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  text-align: left;
+  background-color: #fff;
+  white-space: normal;
+  min-width: 10rem;
+}
+
+.term-grid .grid-week a {
+  font-weight: 500;
+}
+
+.grid-week-cancelled {
+  opacity: 0.6;
+}
+
+.grid-cell {
+  font-size: 1.1rem;
+  min-width: 2.75rem;
+}
+
+.grid-present { background-color: var(--colour-bg-sage); }
+.grid-absent { background-color: var(--colour-bg-blush); }
+.grid-cancelled,
+.grid-moved { color: var(--colour-text-muted); }
+
+.term-grid .grid-payment {
+  text-align: left;
+  white-space: normal;
+  min-width: 11rem;
+}
+
+.grid-pay-overdue,
+.grid-pay-unpaid { color: #8a3b3b; }
+.grid-pay-comp,
+.grid-pay-ended { color: var(--colour-text-muted); }
+
+.grid-seats {
+  color: var(--colour-text-soft);
+  font-size: 0.85rem;
+}
+
+.grid-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs) var(--space-md);
+  list-style: none;
+  padding: 0;
+  margin: var(--space-xs) 0 0;
+  font-size: 0.85rem;
+  color: var(--colour-text-soft);
+}
+
+.grid-legend-symbol {
+  display: inline-block;
+  min-width: 1.6rem;
+  text-align: center;
+  border-radius: var(--radius-sm);
+}
+
+/* Roster and attendance: big touch targets for a phone in one hand. */
+.attendance-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2xs);
+  margin: 0 0 var(--space-2xs);
+}
+
+.attendance-button {
+  min-height: 44px;
+  min-width: 44px;
+  white-space: nowrap;
+  padding: var(--space-2xs) var(--space-sm);
+  background-color: #fff;
+  color: var(--colour-text);
+  border: 1px solid var(--colour-line);
+}
+
+.attendance-button:hover {
+  background-color: var(--colour-bg-warm);
+}
+
+.attendance-present[aria-pressed="true"] {
+  background-color: var(--colour-accent-sage);
+  border-color: var(--colour-accent-sage);
+}
+
+.attendance-absent[aria-pressed="true"] {
+  background-color: var(--colour-accent-blush);
+  border-color: var(--colour-accent-blush);
+}
+
+.attendance-row-present td:first-child { border-left: 4px solid var(--colour-accent-sage); }
+.attendance-row-absent td:first-child { border-left: 4px solid var(--colour-accent-blush); }
+
+.consent-no {
+  font-weight: 600;
+}
+
+.staff-nav {
+  display: flex;
+  gap: var(--space-md);
+  border-bottom: 1px solid var(--colour-line);
+  padding-bottom: var(--space-xs);
+  margin-bottom: var(--space-md);
+}
+
+.staff-nav a {
+  color: var(--colour-text-soft);
+  text-decoration: none;
+}
+
+.attention-actions .inline-form,
+.attention-actions .inline-details {
+  display: block;
+  margin: var(--space-2xs) 0;
+}
+
+.attention-ended summary {
+  cursor: pointer;
+  font-weight: 500;
+  margin: var(--space-md) 0 var(--space-xs);
+}
+
+@media (max-width: 640px) {
+  .detail-list {
+    grid-template-columns: 1fr;
+  }
+
+  .nested-fields {
+    margin-left: 0;
+  }
+
+  /* On a phone each child on the roster is a card: name, big buttons, then
+     the details with their labels. */
+  .roster-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+  }
+
+  .roster-table,
+  .roster-table tbody,
+  .roster-table tr,
+  .roster-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .roster-table tr {
+    border-bottom: 1px solid var(--colour-line);
+    padding: var(--space-xs) 0;
+  }
+
+  .roster-table td {
+    border: none;
+    padding: var(--space-2xs) var(--space-sm);
+  }
+
+  .roster-table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 0.8rem;
+    color: var(--colour-text-muted);
+  }
+
+  .roster-table .attendance-row-present td:first-child,
+  .roster-table .attendance-row-absent td:first-child {
+    border-left: none;
+  }
+
+  .roster-table .attendance-row-present { border-left: 4px solid var(--colour-accent-sage); }
+  .roster-table .attendance-row-absent { border-left: 4px solid var(--colour-accent-blush); }
+
+  .roster-medical {
+    max-width: none;
+  }
+}
+
+/* === 2B admin operations — end === */
+
+/* === 2C waitlist admin, email, ops (routes/admin-waitlist.js, admin-email.js) — start === */
+
+/* Every control on these pages is a comfortable thumb target (44 px). */
+.ops-page button,
+.ops-page .button-link,
+.ops-page select,
+.ops-page input[type="text"],
+.ops-page input[type="email"],
+.ops-page input[type="tel"],
+.ops-page input[type="date"] {
+  min-height: 44px;
+}
+
+.ops-page summary.button-link {
+  display: inline-flex;
+  align-items: center;
+  list-style: none;
+}
+
+.ops-page summary.button-link::-webkit-details-marker {
+  display: none;
+}
+
+/* --- Waitlist --- */
+
+.waitlist-summary {
+  font-weight: 400;
+  margin: var(--space-2xs) 0;
+}
+
+.waitlist-entries {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-sm) 0;
+}
+
+/* The owner's waitlist page; a family's own places use .waitlist-list (2A). */
+.waitlist-entries .waitlist-entry {
+  border-top: 1px solid var(--colour-line-soft);
+  padding: var(--space-sm) 0;
+}
+
+.waitlist-entries .waitlist-entry p {
+  margin: 0 0 var(--space-2xs);
+}
+
+.waitlist-entries .waitlist-entry--offered {
+  background-color: var(--colour-bg-warm);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm);
+}
+
+.waitlist-entry__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-xs);
+}
+
+.waitlist-position {
+  font-weight: 600;
+  min-width: 1.5rem;
+}
+
+.waitlist-contact a {
+  overflow-wrap: anywhere;
+}
+
+.waitlist-note {
+  color: var(--colour-text-soft);
+  font-style: italic;
+  white-space: pre-line;
+}
+
+.waitlist-actions,
+.waitlist-term__tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-xs);
+  margin-top: var(--space-xs);
+}
+
+.ops-confirm[open],
+.waitlist-add[open] {
+  flex-basis: 100%;
+}
+
+.ops-confirm form {
+  background-color: #fff;
+  border: 1px solid var(--colour-line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm);
+  margin-top: var(--space-xs);
+}
+
+.ops-confirm form p {
+  margin: 0 0 var(--space-xs);
+}
+
+.waitlist-earlier {
+  margin: var(--space-sm) 0;
+}
+
+.waitlist-earlier summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  color: var(--colour-text-soft);
+}
+
+.waitlist-earlier ul {
+  list-style: none;
+  padding: 0;
+}
+
+.waitlist-earlier__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-xs);
+  border-top: 1px solid var(--colour-line-soft);
+  padding: var(--space-2xs) 0;
+}
+
+.status-waiting { background-color: var(--colour-bg-blush); }
+.status-offered { background-color: #fff; border: 1px solid var(--colour-accent-blush); }
+.status-booked { background-color: var(--colour-bg-sage); }
+.status-declined,
+.status-removed { background-color: var(--colour-line-soft); color: var(--colour-text-muted); }
+
+@media (max-width: 40rem) {
+  .waitlist-term {
+    padding: var(--space-sm);
+  }
+}
+
+/* --- Offer a place --- */
+
+/* Selectors carry the form class so they outrank the shared
+   .consent-group label / .form-group input[type="radio"] rules. */
+.offer-choice .offer-kind,
+.offer-choice .offer-week label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.offer-choice .offer-kind input,
+.offer-choice .offer-week input {
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.offer-weeks {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.offer-week {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-xs);
+  border-top: 1px solid var(--colour-line-soft);
+}
+
+.offer-summary h2 {
+  margin-top: 0;
+}
+
+/* --- Email families --- */
+
+.email-compose .email-audience {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.email-compose .email-audience input {
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.email-compose textarea {
+  min-height: 14rem;
+  line-height: 1.5;
+}
+
+.email-preview {
+  background-color: #fff;
+  border: 1px dashed var(--colour-line);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  margin: var(--space-md) 0;
+  overflow-wrap: anywhere;
+}
+
+.email-preview__meta {
+  color: var(--colour-text-soft);
+  font-size: 0.9rem;
+  border-bottom: 1px solid var(--colour-line-soft);
+  padding-bottom: var(--space-xs);
+}
+
+.email-recipients-box summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+.email-recipients,
+.email-results {
+  list-style: none;
+  padding: 0;
+}
+
+.email-recipients li,
+.email-results li {
+  border-top: 1px solid var(--colour-line-soft);
+  padding: var(--space-2xs) 0;
+  overflow-wrap: anywhere;
+}
+
+.email-send {
+  margin: var(--space-md) 0;
+}
+
+.email-results__status {
+  display: inline-block;
+  min-width: 7rem;
+  font-weight: 500;
+}
+
+.email-results__status--failed,
+.email-status-failed {
+  color: #a04545;
+  font-weight: 500;
+}
+
+.email-results__status--skipped {
+  color: var(--colour-text-muted);
+}
+
+/* --- Email log --- */
+
+.email-log-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-sm);
+  margin: var(--space-md) 0;
+}
+
+.email-log-filters label {
+  flex: 1 1 11rem;
+  font-size: 0.9rem;
+}
+
+/* On a phone each log row becomes a small labelled card. */
+@media (max-width: 40rem) {
+  .email-log thead {
+    display: none;
+  }
+
+  .email-log,
+  .email-log tbody,
+  .email-log tr,
+  .email-log td {
+    display: block;
+    width: 100%;
+  }
+
+  .email-log tr {
+    border-bottom: 1px solid var(--colour-line);
+    padding: var(--space-xs) 0;
+  }
+
+  .email-log td {
+    border: none;
+    padding: 0.15rem var(--space-sm);
+    overflow-wrap: anywhere;
+  }
+
+  .email-log td::before {
+    content: attr(data-label) ": ";
+    color: var(--colour-text-muted);
+    font-size: 0.8rem;
+  }
+}
+
+/* === 2C waitlist admin, email, ops — end === */
+
+/* === Phase 3 review fixes — start === */
+
+/* A warning beside a money action (e.g. recording a payment while Stripe
+   is still taking instalments). */
+.form-warning {
+  background-color: var(--colour-bg-warm);
+  border: 1px solid var(--colour-accent-blush);
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-sm);
+  color: var(--colour-text);
+  max-width: var(--max-width-prose);
+}
+
+.resolve-form fieldset {
+  border: none;
+  padding: 0;
+  margin: 0 0 var(--space-2xs);
+}
+
+.resolve-form fieldset label {
+  display: block;
+}
+
+/* === Phase 3 review fixes — end === */

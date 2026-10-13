@@ -1,0 +1,86 @@
+# Mini & Co. — one Worker serves the static marketing site (as assets) plus the
+# booking app (/book, /account, /admin, /api). See DEPLOYMENT.md for setup.
+name = "miniandco-site"
+main = "src/index.js"
+compatibility_date = "2026-05-01"
+
+# Static assets come ONLY from booking/public, which scripts/stage-assets.mjs
+# fills from an explicit allow-list of site files (`npm run dev` and
+# `npm run deploy` stage first). Nothing else in the repository is ever served.
+[assets]
+directory = "public"
+binding = "ASSETS"
+html_handling = "auto-trailing-slash"
+not_found_handling = "none"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "miniandco-booking"
+# Local dev ignores this id. For production: `wrangler d1 create miniandco-booking`
+# and paste the real id here before `wrangler deploy`.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# Production configuration. Local development overrides these via .dev.vars.
+# Secrets are NOT set here — use `wrangler secret put <NAME>` for:
+#   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, RESEND_API_KEY, META_CAPI_TOKEN (optional)
+[vars]
+ENVIRONMENT = "production"
+EMAIL_DRIVER = "resend"
+PAYMENTS_DRIVER = "stripe"
+PUBLIC_BASE_URL = "https://miniandcosensoryclasses.com"
+EMAIL_FROM = "Mini & Co. <bookings@miniandcosensoryclasses.com>"
+# Replies to every email the system sends go here (families are told to
+# "reply to this email"); blank = the first ADMIN_EMAILS address.
+EMAIL_REPLY_TO = "miniandco.classes@gmail.com"
+ADMIN_EMAILS = "miniandco.classes@gmail.com"
+# Facilitators: roster + attendance only. Comma-separated; re-checked on every request.
+STAFF_EMAILS = ""
+META_PIXEL_ID = "1991468878409217"
+WAIVER_VERSION = "2026-05-14"
+
+# Scheduled jobs (lib/cron.js): sweep lapsed holds, expire waitlist offers,
+# purge old records; Phase 2 adds reminders and nudges. Every 15 minutes.
+[triggers]
+crons = ["*/15 * * * *"]
+
+[observability.logs]
+enabled = true
+
+# --- Staging -----------------------------------------------------------------
+# `npm run deploy:staging` (wrangler deploy --env staging) publishes the same
+# code as a separate Worker on its own workers.dev address with its OWN
+# database (review finding 10), so test bookings, test emails and Stripe
+# test-mode data never touch production — and production's live keys never
+# meet test data. Secrets are per environment too:
+#   npx wrangler secret put STRIPE_SECRET_KEY --env staging   (sk_test_…)
+#   … STRIPE_WEBHOOK_SECRET, RESEND_API_KEY (DEPLOYMENT.md step 6).
+# Wrangler does not inherit vars or bindings into [env.*]: everything below
+# is repeated on purpose. The static assets, cron trigger and logs are
+# inherited. ENVIRONMENT=staging is not "development": the mock payments
+# driver, the console email driver and the /dev pages refuse to run, and
+# the real Stripe (test mode) and Resend drivers are used.
+[env.staging]
+name = "miniandco-site-staging"
+workers_dev = true
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "miniandco-booking-staging"
+# `npx wrangler d1 create miniandco-booking-staging` and paste its id here.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[env.staging.vars]
+ENVIRONMENT = "staging"
+EMAIL_DRIVER = "resend"
+PAYMENTS_DRIVER = "stripe"
+# The staging Worker's own address (Workers → miniandco-site-staging →
+# Domains & Routes shows it): every email link and Stripe return URL uses it.
+PUBLIC_BASE_URL = "https://miniandco-site-staging.REPLACE-WITH-YOUR-SUBDOMAIN.workers.dev"
+EMAIL_FROM = "Mini & Co. (staging) <bookings@miniandcosensoryclasses.com>"
+EMAIL_REPLY_TO = "miniandco.classes@gmail.com"
+ADMIN_EMAILS = "miniandco.classes@gmail.com"
+STAFF_EMAILS = ""
+META_PIXEL_ID = ""
+WAIVER_VERSION = "2026-05-14"

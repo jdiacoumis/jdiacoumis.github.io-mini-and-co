@@ -1,0 +1,6 @@
+node_modules/
+.wrangler/
+*.log
+.dev.vars.local
+# Staged static site (built by scripts/stage-assets.mjs; never committed)
+public/
