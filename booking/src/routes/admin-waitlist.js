@@ -106,11 +106,15 @@ async function loadTerms(env, termId = null) {
   ).bind(termId).all()).results || [];
 }
 
-async function loadEntries(env, termIds) {
+// Every entry of these terms in line order: joined_at, then rowid (join times
+// have second precision; rowid is insertion order). The parent pages count a
+// family's place in line the same way (lib/parent-flow.js
+// listWaitlistEntries), so "number 2 in line" there is the second waiting or
+// offered entry here.
+export async function loadEntries(env, termIds) {
   if (!termIds.length) return [];
   const placeholders = termIds.map((_, i) => `?${i + 1}`).join(', ');
   return (await env.DB.prepare(
-    // joined_at has second precision: rowid (insertion order) breaks ties.
     `${ENTRY_SELECT} WHERE w.term_id IN (${placeholders}) ORDER BY w.joined_at, w.rowid`,
   ).bind(...termIds).all()).results || [];
 }
@@ -332,9 +336,13 @@ export async function addToWaitlist(env, {
       if (existing.status !== 'declined' && existing.status !== 'removed') {
         return fail('already_listed', `${child.name} is already on this waitlist (${ENTRY_STATUS_LABELS[existing.status].toLowerCase()}).`);
       }
+      // The back of the line: a new join time AND the newest rowid, so a
+      // family who joined in this same second stays ahead (this page and the
+      // parent's "place in line" both order by joined_at, then rowid).
       const rejoin = await env.DB.prepare(
         `UPDATE waitlist SET status = 'waiting', joined_at = ?2, offered_at = NULL, offer_expires_at = NULL,
-                resolved_at = NULL, note = CASE WHEN ?3 = '' THEN note ELSE ?3 END
+                resolved_at = NULL, note = CASE WHEN ?3 = '' THEN note ELSE ?3 END,
+                rowid = (SELECT MAX(rowid) + 1 FROM waitlist)
          WHERE id = ?1 AND status IN ('declined', 'removed')`,
       ).bind(existing.id, now, cleanNote).run();
       if (rejoin.meta.changes === 0) return fail('already_listed', `${child.name} is already on this waitlist.`);
