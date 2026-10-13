@@ -1,5 +1,5 @@
 // Booking domain (designs D2, D3, D6) against a real D1: kinds and pricing,
-// opening rules, one trial per child per class, credits and vouchers inside
+// opening rules, one trial per child across classes, credits and vouchers inside
 // the reservation batch (and given back on expiry), the guarded confirmation
 // and cancellation.
 
@@ -80,7 +80,7 @@ test('plan choice snapshots the schedule; a plan needs a term booking', async ()
   assert.equal(casual.ok, false);
 });
 
-test('one trial per child per class, at the trial price', async () => {
+test('one trial per child (any class), at the trial price', async () => {
   const fam = await seedFamilyAndTerm(env, { prefix: 'd', trialPrice: 1500, children: 2 });
   const first = await book(fam, { kind: 'trial', sessionIds: [fam.sessionIds[0]] });
   assert.equal(first.prepared.quote.listCents, 1500);

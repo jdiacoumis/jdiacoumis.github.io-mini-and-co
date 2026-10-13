@@ -3,7 +3,7 @@
 //
 //   * THE definition of a held seat (holdsSeatSql / heldSeatsSql) — every
 //     count, guard, roster, list and grid uses it;
-//   * terms and their sessions, returning families, one trial per child;
+//   * terms and their sessions, returning families, one trial per child (any class);
 //   * prepareBooking(): pricing + every eligibility check, for a quote;
 //   * createPendingBooking(): capacity-guarded, atomic seat reservation that
 //     also redeems credits and counts the voucher use in the same batch;
@@ -102,17 +102,14 @@ function childInSessionSql(sessionIdExpr, childParam, nowParam, excludeBookingPa
                     AND cb.id != ${excludeBookingParam} AND ${holdsSeatSql('cbs', 'cb', nowParam)})`;
 }
 
-// Does this child hold a live trial for the class (one trial per child per
-// class, D2)? The class comes from the trial's term or its session.
+// Does this child hold a live trial anywhere? ONE trial per child across all
+// classes (owner decision, 2026-10-13 interview). `classParam` stays in the
+// signature for call-site stability but no longer narrows the check.
 function trialHeldSql(childParam, classParam, nowParam, excludeBookingParam = null) {
   return `EXISTS (SELECT 1 FROM bookings tb
                   WHERE tb.child_id = ${childParam} AND tb.kind = 'trial'
                     ${excludeBookingParam ? `AND tb.id != ${excludeBookingParam}` : ''}
-                    AND ${bookingLiveSql('tb', nowParam)}
-                    AND (EXISTS (SELECT 1 FROM terms tt WHERE tt.id = tb.term_id AND tt.class_id = ${classParam})
-                         OR EXISTS (SELECT 1 FROM booking_sessions tbs
-                                    JOIN class_sessions tcs ON tcs.id = tbs.session_id
-                                    WHERE tbs.booking_id = tb.id AND tcs.class_id = ${classParam})))`;
+                    AND ${bookingLiveSql('tb', nowParam)})`;
 }
 
 function decorateSession(row, now) {
@@ -278,7 +275,7 @@ export async function isReturningFamily(env, userId, termId) {
   return Boolean(row);
 }
 
-// Has this child already got a live trial for this class?
+// Has this child already got a live trial (any class)?
 export async function childHasTrial(env, childId, classId, now = nowIso()) {
   const row = await env.DB.prepare(
     `SELECT ${trialHeldSql('?1', '?2', '?3')} AS held`,

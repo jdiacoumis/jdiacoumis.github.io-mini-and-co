@@ -674,3 +674,20 @@ button:active {
   font-size: 0.85rem;
   margin: var(--space-2xs) 0;
 }
+
+/* ===========================================================================
+   Phase 2 sections. Each Phase 2 agent adds its rules ONLY inside its own
+   block below so the three worktrees merge cleanly. Keep the markers.
+   =========================================================================== */
+
+/* === 2A parent flow (routes/booking.js, account.js, waitlist.js) — start === */
+
+/* === 2A parent flow — end === */
+
+/* === 2B admin operations (routes/admin*.js) — start === */
+
+/* === 2B admin operations — end === */
+
+/* === 2C waitlist admin, email, ops (routes/admin-waitlist.js, admin-email.js) — start === */
+
+/* === 2C waitlist admin, email, ops — end === */
