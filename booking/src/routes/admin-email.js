@@ -202,6 +202,8 @@ async function composePage(env, user, { values, error = '', status = 200 }) {
       <p class="lede">Write one message and send it to a group of families. Each family gets their own copy,
         addressed only to them, and every email is kept in the <a href="/admin/email/log">email log</a>.
         You'll see a preview before anything is sent.</p>
+      <p class="muted">This is for news about the classes families are booked into or waiting for. For promotions
+        (say, a new term to past families), use a mailing-list tool that includes an unsubscribe link.</p>
       ${composeForm(user, terms, values)}
     </div>
   `;
@@ -407,8 +409,8 @@ export async function handleEmailLog(req, env) {
     <div class="ops-page">
       <h1>Email log</h1>
       <p class="lede">Every email the system has sent, newest first — confirmations, reminders, offers,
-        payment notices, your messages, and the alerts sent to you. A failed email is retried automatically
-        when it was sent by a scheduled job.</p>
+        payment notices, your messages, and the alerts sent to you. (Sign-in links are never kept here.)
+        A reminder that failed is tried again automatically by the next scheduled run (every 15 minutes).</p>
       <form method="get" action="/admin/email/log" class="email-log-filters">
         <label>Type
           <select name="template">
